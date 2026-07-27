@@ -11,6 +11,7 @@ from dataclasses import dataclass
 
 import httpx
 
+from app.audit import AuditError, Finding, audit_manifests
 from app.config import Settings
 from app.devin import DevinApiError, DevinClient, Session
 from app.github import Comparison, GitHubApiError, GitHubClient
@@ -49,6 +50,7 @@ class ScanResult:
     manifests: tuple[str, ...]
     session: Session | None
     reason: str
+    findings: tuple[Finding, ...] = ()
 
 
 def find_manifests(files: tuple[str, ...]) -> tuple[str, ...]:
@@ -66,7 +68,10 @@ def scan_tag(repository: str, head_sha: str) -> str:
 
 
 def build_prompt(
-    repository: str, comparison: Comparison, manifests: tuple[str, ...]
+    repository: str,
+    comparison: Comparison,
+    manifests: tuple[str, ...],
+    findings: tuple[Finding, ...] = (),
 ) -> str:
     diff_url = (
         f"https://github.com/{repository}/compare/"
@@ -84,7 +89,18 @@ def build_prompt(
             "",
             f"Package ecosystems involved: {', '.join(ecosystems(manifests))}.",
             "",
+            *_audit_section(findings),
             "REQUIREMENTS:",
+            *(
+                [
+                    (
+                        "- Fix every vulnerability listed above first; those bumps "
+                        "are the priority of this PR."
+                    )
+                ]
+                if findings
+                else []
+            ),
             (
                 "- For each manifest above, check the declared dependencies against "
                 "the latest releases and identify the ones that are out of date."
@@ -110,6 +126,19 @@ def build_prompt(
             ),
         ]
     )
+
+
+def _audit_section(findings: tuple[Finding, ...]) -> list[str]:
+    if not findings:
+        return []
+    return [
+        (
+            "The scanner ran the ecosystem audit tools (`npm audit --json`, "
+            "`pip-audit`) on that commit and found:"
+        ),
+        *(f"- {finding.describe()}" for finding in findings),
+        "",
+    ]
 
 
 class DependencyScanner:
@@ -163,8 +192,9 @@ class DependencyScanner:
                 repository, base_sha, head_sha, (), None, "no dependency changes"
             )
 
+        findings = await self._audit(repository, head_sha, manifests)
         session = await self._devin.create_tagged_session(
-            prompt=build_prompt(repository, comparison, manifests),
+            prompt=build_prompt(repository, comparison, manifests, findings),
             title=f"chore(deps): bump dependencies in {repository}",
             repository=repository,
             dedupe_tag=scan_tag(repository, head_sha),
@@ -185,8 +215,31 @@ class DependencyScanner:
             session.session_id,
         )
         return ScanResult(
-            repository, base_sha, head_sha, manifests, session, "bump session created"
+            repository,
+            base_sha,
+            head_sha,
+            manifests,
+            session,
+            "bump session created",
+            findings,
         )
+
+    async def _audit(
+        self, repository: str, head_sha: str, manifests: tuple[str, ...]
+    ) -> tuple[Finding, ...]:
+        if not self._settings.dep_audit_enabled:
+            return ()
+        try:
+            return await audit_manifests(
+                repository,
+                head_sha,
+                manifests,
+                token=self._settings.github_token,
+                timeout=self._settings.dep_audit_timeout_seconds,
+            )
+        except (AuditError, OSError):
+            logger.exception("Audit of %s@%s failed", repository, head_sha)
+            return ()
 
     async def run_forever(self) -> None:
         interval = self._settings.dep_scan_interval_seconds

@@ -165,6 +165,7 @@ async def trigger_dep_scan() -> dict[str, Any]:
                 "base_sha": result.base_sha,
                 "head_sha": result.head_sha,
                 "manifests": list(result.manifests),
+                "findings": [finding.describe() for finding in result.findings],
                 "reason": result.reason,
                 "session_id": result.session.session_id if result.session else None,
                 "session_url": result.session.url if result.session else None,
