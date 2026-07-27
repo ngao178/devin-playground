@@ -8,20 +8,22 @@ labeled `devin`.
 1. GitHub sends an `issues` webhook to `POST /webhook`.
 2. The request signature is verified against `GITHUB_WEBHOOK_SECRET`.
 3. If the event is `labeled` with the trigger label (or `opened` with that label
-   already applied), the app POSTs to `https://api.devin.ai/v1/sessions` with a
-   prompt built from the issue title, body, and URL.
+   already applied), the app POSTs to
+   `https://api.devin.ai/v3/organizations/{DEVIN_ORG_ID}/sessions` with a prompt
+   built from the issue title, body, and URL.
 4. The response returns the session id and URL; the session itself is instructed
    to open a PR referencing the issue and comment the PR URL back on it.
 
-Sessions are created with `idempotent: true`, so replays or re-labeling reuse the
-existing session instead of spawning duplicates.
+Every session is tagged `issue:<owner>/<repo>#<number>`, and the app looks that
+tag up before creating anything, so replays or re-labeling reuse the existing
+session instead of spawning duplicates.
 
 ## Run locally
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
-cp .env.example .env   # fill in DEVIN_API_KEY and GITHUB_WEBHOOK_SECRET
+cp .env.example .env   # fill in DEVIN_API_KEY, DEVIN_ORG_ID, GITHUB_WEBHOOK_SECRET
 uvicorn app.main:app --reload --port 8000
 ```
 
@@ -54,9 +56,10 @@ Create an issue label named `devin` (or set `TRIGGER_LABEL` to something else).
 
 | Variable | Required | Default | Purpose |
 | --- | --- | --- | --- |
-| `DEVIN_API_KEY` | yes | — | Auth for the Devin API |
+| `DEVIN_API_KEY` | yes | — | Service user key (`cog_`) for the Devin v3 API |
+| `DEVIN_ORG_ID` | yes | — | Org (`org-`) the sessions are created in |
 | `GITHUB_WEBHOOK_SECRET` | yes | — | Verifies `X-Hub-Signature-256` |
-| `DEVIN_API_URL` | no | `https://api.devin.ai/v1` | API base URL |
+| `DEVIN_API_URL` | no | `https://api.devin.ai` | API base URL |
 | `TRIGGER_LABEL` | no | `devin` | Label that starts a session |
 | `ALLOWED_REPOS` | no | — (all repos) | Comma-separated `owner/repo` allowlist |
 

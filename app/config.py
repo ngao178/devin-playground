@@ -10,6 +10,7 @@ class ConfigError(RuntimeError):
 class Settings:
     devin_api_key: str
     devin_api_url: str
+    devin_org_id: str
     github_webhook_secret: str
     trigger_label: str
     allowed_repos: frozenset[str]
@@ -25,6 +26,10 @@ class Settings:
         if not devin_api_key:
             raise ConfigError("DEVIN_API_KEY is not set")
 
+        devin_org_id = os.environ.get("DEVIN_ORG_ID", "").strip()
+        if not devin_org_id:
+            raise ConfigError("DEVIN_ORG_ID is not set")
+
         github_webhook_secret = os.environ.get("GITHUB_WEBHOOK_SECRET", "").strip()
         if not github_webhook_secret:
             raise ConfigError("GITHUB_WEBHOOK_SECRET is not set")
@@ -32,8 +37,9 @@ class Settings:
         return cls(
             devin_api_key=devin_api_key,
             devin_api_url=os.environ.get(
-                "DEVIN_API_URL", "https://api.devin.ai/v1"
+                "DEVIN_API_URL", "https://api.devin.ai"
             ).rstrip("/"),
+            devin_org_id=devin_org_id,
             github_webhook_secret=github_webhook_secret,
             trigger_label=os.environ.get("TRIGGER_LABEL", "devin").strip(),
             allowed_repos=frozenset(

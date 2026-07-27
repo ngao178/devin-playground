@@ -10,13 +10,26 @@ from fastapi.testclient import TestClient
 from app.main import app
 
 SECRET = "test-secret"
+ORG = "org-test"
+SESSIONS_URL = f"https://api.devin.ai/v3/organizations/{ORG}/sessions"
+SESSION_BODY = {
+    "session_id": "devin-123",
+    "url": "https://app.devin.ai/sessions/123",
+}
+
+
+def mock_no_existing_session() -> None:
+    respx.get(SESSIONS_URL).mock(
+        return_value=httpx.Response(200, json={"items": [], "total": 0})
+    )
 
 
 @pytest.fixture(autouse=True)
 def env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DEVIN_API_KEY", "test-key")
     monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", SECRET)
-    monkeypatch.setenv("DEVIN_API_URL", "https://api.devin.ai/v1")
+    monkeypatch.setenv("DEVIN_API_URL", "https://api.devin.ai")
+    monkeypatch.setenv("DEVIN_ORG_ID", ORG)
     monkeypatch.setenv("TRIGGER_LABEL", "devin")
     monkeypatch.setenv("ALLOWED_REPOS", "ngao178/superset")
 
@@ -77,15 +90,9 @@ def test_ping(client: TestClient) -> None:
 
 @respx.mock
 def test_creates_session(client: TestClient) -> None:
-    route = respx.post("https://api.devin.ai/v1/sessions").mock(
-        return_value=httpx.Response(
-            200,
-            json={
-                "session_id": "devin-123",
-                "url": "https://app.devin.ai/sessions/123",
-                "is_new_session": True,
-            },
-        )
+    mock_no_existing_session()
+    route = respx.post(SESSIONS_URL).mock(
+        return_value=httpx.Response(200, json=SESSION_BODY)
     )
 
     response = post(client, labeled_payload())
@@ -97,9 +104,24 @@ def test_creates_session(client: TestClient) -> None:
         "url": "https://app.devin.ai/sessions/123",
     }
     sent = json.loads(route.calls.last.request.content)
-    assert sent["idempotent"] is True
+    assert sent["repos"] == ["ngao178/superset"]
+    assert "issue:ngao178/superset#7" in sent["tags"]
     assert "issues/7" in sent["prompt"]
     assert "Fixes ngao178/superset#7" in sent["prompt"]
+
+
+@respx.mock
+def test_reuses_existing_session_for_issue(client: TestClient) -> None:
+    listing = respx.get(SESSIONS_URL).mock(
+        return_value=httpx.Response(200, json={"items": [SESSION_BODY], "total": 1})
+    )
+    create = respx.post(SESSIONS_URL).mock(return_value=httpx.Response(500))
+
+    response = post(client, labeled_payload())
+
+    assert response.json()["status"] == "existing"
+    assert not create.called
+    assert listing.calls.last.request.url.params["tags"] == "issue:ngao178/superset#7"
 
 
 def test_ignores_other_repos(client: TestClient) -> None:
@@ -112,14 +134,9 @@ def test_allows_any_repo_when_unset(
 ) -> None:
     monkeypatch.delenv("ALLOWED_REPOS")
     with respx.mock:
-        respx.post("https://api.devin.ai/v1/sessions").mock(
-            return_value=httpx.Response(
-                200,
-                json={
-                    "session_id": "devin-123",
-                    "url": "https://app.devin.ai/sessions/123",
-                },
-            )
+        mock_no_existing_session()
+        respx.post(SESSIONS_URL).mock(
+            return_value=httpx.Response(200, json=SESSION_BODY)
         )
         response = post(client, labeled_payload(repo="someone-else/superset"))
     assert response.json()["status"] == "created"
@@ -127,7 +144,8 @@ def test_allows_any_repo_when_unset(
 
 @respx.mock
 def test_malformed_devin_response_returns_502(client: TestClient) -> None:
-    respx.post("https://api.devin.ai/v1/sessions").mock(
+    mock_no_existing_session()
+    respx.post(SESSIONS_URL).mock(
         return_value=httpx.Response(200, json={"session_id": "devin-123"})
     )
     response = post(client, labeled_payload())
@@ -137,7 +155,8 @@ def test_malformed_devin_response_returns_502(client: TestClient) -> None:
 
 @respx.mock
 def test_devin_error_returns_502(client: TestClient) -> None:
-    respx.post("https://api.devin.ai/v1/sessions").mock(
+    mock_no_existing_session()
+    respx.post(SESSIONS_URL).mock(
         return_value=httpx.Response(500, json={"error": "boom"})
     )
     assert post(client, labeled_payload()).status_code == 502

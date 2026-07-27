@@ -84,7 +84,9 @@ async def webhook(
     if not settings.is_repo_allowed(issue.repository):
         return {"status": "ignored", "reason": f"repo not allowed: {issue.repository}"}
 
-    client = DevinClient(settings.devin_api_key, settings.devin_api_url)
+    client = DevinClient(
+        settings.devin_api_key, settings.devin_api_url, settings.devin_org_id
+    )
     try:
         session = await client.create_session(issue)
     except (httpx.HTTPError, DevinApiError) as exc:
