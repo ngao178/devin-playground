@@ -18,6 +18,7 @@ def env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", SECRET)
     monkeypatch.setenv("DEVIN_API_URL", "https://api.devin.ai/v1")
     monkeypatch.setenv("TRIGGER_LABEL", "devin")
+    monkeypatch.setenv("ALLOWED_REPOS", "ngao178/superset")
 
 
 @pytest.fixture
@@ -41,16 +42,16 @@ def post(
     )
 
 
-def labeled_payload(label: str = "devin") -> dict:
+def labeled_payload(label: str = "devin", repo: str = "ngao178/superset") -> dict:
     return {
         "action": "labeled",
         "label": {"name": label},
-        "repository": {"full_name": "ngao178/devin-playground"},
+        "repository": {"full_name": repo},
         "issue": {
             "number": 7,
             "title": "Broken thing",
             "body": "It is broken.",
-            "html_url": "https://github.com/ngao178/devin-playground/issues/7",
+            "html_url": f"https://github.com/{repo}/issues/7",
             "labels": [{"name": label}],
         },
     }
@@ -98,7 +99,30 @@ def test_creates_session(client: TestClient) -> None:
     sent = json.loads(route.calls.last.request.content)
     assert sent["idempotent"] is True
     assert "issues/7" in sent["prompt"]
-    assert "Fixes ngao178/devin-playground#7" in sent["prompt"]
+    assert "Fixes ngao178/superset#7" in sent["prompt"]
+
+
+def test_ignores_other_repos(client: TestClient) -> None:
+    response = post(client, labeled_payload(repo="someone-else/superset"))
+    assert response.json()["status"] == "ignored"
+
+
+def test_allows_any_repo_when_unset(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("ALLOWED_REPOS")
+    with respx.mock:
+        respx.post("https://api.devin.ai/v1/sessions").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "session_id": "devin-123",
+                    "url": "https://app.devin.ai/sessions/123",
+                },
+            )
+        )
+        response = post(client, labeled_payload(repo="someone-else/superset"))
+    assert response.json()["status"] == "created"
 
 
 @respx.mock

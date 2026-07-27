@@ -12,6 +12,12 @@ class Settings:
     devin_api_url: str
     github_webhook_secret: str
     trigger_label: str
+    allowed_repos: frozenset[str]
+
+    def is_repo_allowed(self, repository: str) -> bool:
+        if not self.allowed_repos:
+            return True
+        return repository.lower() in self.allowed_repos
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -30,4 +36,9 @@ class Settings:
             ).rstrip("/"),
             github_webhook_secret=github_webhook_secret,
             trigger_label=os.environ.get("TRIGGER_LABEL", "devin").strip(),
+            allowed_repos=frozenset(
+                repo.strip().lower()
+                for repo in os.environ.get("ALLOWED_REPOS", "").split(",")
+                if repo.strip()
+            ),
         )

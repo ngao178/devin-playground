@@ -36,6 +36,10 @@ docker run --rm -p 8000:8000 --env-file .env devin-issue-webhook
 
 ## Point GitHub at it
 
+The service is currently configured for
+[`ngao178/superset`](https://github.com/ngao178/superset) via `ALLOWED_REPOS`;
+issues from any other repo are ignored even if the signature is valid.
+
 Expose the port publicly (deploy it, or `ngrok http 8000` while testing), then in
 the repo: **Settings → Webhooks → Add webhook**
 
@@ -54,6 +58,7 @@ Create an issue label named `devin` (or set `TRIGGER_LABEL` to something else).
 | `GITHUB_WEBHOOK_SECRET` | yes | — | Verifies `X-Hub-Signature-256` |
 | `DEVIN_API_URL` | no | `https://api.devin.ai/v1` | API base URL |
 | `TRIGGER_LABEL` | no | `devin` | Label that starts a session |
+| `ALLOWED_REPOS` | no | — (all repos) | Comma-separated `owner/repo` allowlist |
 
 ## Tests
 

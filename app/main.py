@@ -81,6 +81,9 @@ async def webhook(
         return {"status": "ignored", "reason": "trigger conditions not met"}
 
     issue = parse_issue(payload)
+    if not settings.is_repo_allowed(issue.repository):
+        return {"status": "ignored", "reason": f"repo not allowed: {issue.repository}"}
+
     client = DevinClient(settings.devin_api_key, settings.devin_api_url)
     try:
         session = await client.create_session(issue)
