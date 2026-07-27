@@ -50,6 +50,11 @@ class ScanResult:
     session: Session | None
     reason: str
     findings: tuple[Finding, ...] = ()
+    error: str = ""
+
+    @property
+    def failed(self) -> bool:
+        return bool(self.error)
 
 
 def find_manifests(files: tuple[str, ...]) -> tuple[str, ...]:
@@ -159,8 +164,18 @@ class DependencyScanner:
         for repository in self._settings.dep_scan_repos:
             try:
                 results.append(await self.scan_repo(repository))
-            except (httpx.HTTPError, GitHubApiError, DevinApiError):
+            except (httpx.HTTPError, GitHubApiError, DevinApiError) as exc:
                 logger.exception("Dependency scan failed for %s", repository)
+                results.append(
+                    ScanResult(
+                        repository=repository,
+                        head_sha="",
+                        manifests=(),
+                        session=None,
+                        reason="scan failed",
+                        error=f"{type(exc).__name__}: {exc}",
+                    )
+                )
         return results
 
     async def scan_repo(self, repository: str) -> ScanResult:

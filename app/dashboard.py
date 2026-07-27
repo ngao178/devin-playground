@@ -109,25 +109,38 @@ async function runScan() {
   try {
     const response = await fetch('/dep-scan', {method: 'POST'});
     const body = await response.json();
+    if (!response.ok) {
+      throw new Error(body.detail || response.status);
+    }
     const scans = body.scans || [];
     out.textContent = scans.length
       ? scans.map(function (scan) {
+          if (scan.error) { return scan.repository + ': ' + scan.error; }
           const session = scan.session_url ? ' -> ' + scan.session_url : '';
           const findings = (scan.findings || []).length
             ? '\\n    ' + scan.findings.join('\\n    ')
             : '';
           return scan.repository + ': ' + scan.reason + session + findings;
         }).join('\\n')
-      : JSON.stringify(body);
+      : 'No repositories are configured for scanning.';
   } catch (err) {
     out.textContent = 'Scan failed: ' + err;
   } finally {
+    sessionStorage.setItem('depscan-output', out.textContent);
     scanning = false;
     btn.disabled = false;
     btn.textContent = 'Run dependency scan';
   }
 }
 setInterval(function () { if (!scanning) { location.reload(); } }, 15000);
+window.addEventListener('DOMContentLoaded', function () {
+  const previous = sessionStorage.getItem('depscan-output');
+  const out = document.getElementById('scan-out');
+  if (previous && out) {
+    out.hidden = false;
+    out.textContent = previous;
+  }
+});
 </script>
 """
 
