@@ -52,7 +52,13 @@ Every `DEP_SCAN_INTERVAL_SECONDS` (default `150`, i.e. 2.5 minutes) it:
 2. Diffs `last-scanned-sha...HEAD` via the GitHub compare API and looks for
    changed dependency manifests/lockfiles (`requirements*.txt`,
    `pyproject.toml`, `package.json`, `go.mod`, `Cargo.toml`, `Gemfile`, …).
-3. If any are touched, starts a Devin session tagged
+3. If any are touched, shallow-checks-out that commit into a temp dir and runs
+   the ecosystem audit tools (`npm audit --json`, `pip-audit`), so the session
+   gets a concrete vulnerability list (package, severity, installed range, fix
+   version). Requires `git`, `npm`, and `pip-audit` on `PATH` (all installed in
+   the Docker image); set `DEP_AUDIT_ENABLED=false` to skip it. Audit failures
+   are logged and the scan continues without findings.
+4. Then starts a Devin session tagged
    `depscan:<owner>/<repo>@<sha>` that checks the declared dependencies against
    the latest releases and **opens the bump pull requests** (one per ecosystem,
    `chore(deps): bump <ecosystem> dependencies`, versions ≥7 days old,
@@ -131,7 +137,10 @@ Create an issue label named `devin` (or set `TRIGGER_LABEL` to something else).
 | `DEP_SCAN_ENABLED` | no | `true` | Turns the periodic dependency scanner on/off |
 | `DEP_SCAN_INTERVAL_SECONDS` | no | `150` | Seconds between dependency scans |
 | `DEP_SCAN_REPOS` | no | `ALLOWED_REPOS` | Comma-separated repos to scan |
+| `DEP_AUDIT_ENABLED` | no | `true` | Run `npm audit --json` / `pip-audit` on the flagged commit |
+| `DEP_AUDIT_TIMEOUT_SECONDS` | no | `300` | Per-command timeout for checkout and audits |
 | `GITHUB_TOKEN` | no | — | Raises GitHub read rate limits; required for private repos |
+| `LOG_LEVEL` | no | `INFO` | Root log level |
 
 ## Tests
 
