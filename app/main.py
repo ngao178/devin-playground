@@ -116,7 +116,7 @@ async def webhook(
 
 @app.get("/", response_class=HTMLResponse)
 @app.get("/sessions", response_class=HTMLResponse)
-async def sessions_dashboard(refresh: bool = False) -> HTMLResponse:
+async def sessions_dashboard(refresh: bool = True) -> HTMLResponse:
     if refresh:
         await refresh_statuses()
     sessions = await store.list()

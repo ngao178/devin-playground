@@ -106,6 +106,7 @@ def render_dashboard(sessions: list[TrackedSession]) -> str:
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="refresh" content="15">
 <title>Devin session dashboard</title>
 <style>
   body {{ font-family: system-ui, -apple-system, sans-serif; margin: 0;

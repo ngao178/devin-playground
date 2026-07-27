@@ -31,11 +31,14 @@ HTML dashboard that shows:
 - **A table** of every tracked session with its status badge, linked session URL,
   originating issue, and created/updated timestamps.
 
-Add `?refresh=true` (e.g. `http://localhost:8000/?refresh=true`) to poll the Devin
-API for the latest status of each session before rendering.
+The dashboard polls the Devin API for the latest status of each session on every
+load and auto-reloads every 15 seconds, so the numbers update on their own. Pass
+`?refresh=false` (e.g. `http://localhost:8000/?refresh=false`) to skip the live
+status poll and render the last-known statuses instantly.
 
 A session counts as *active* until its status is terminal (`finished`, `expired`,
-`blocked`, `stopped`, `failed`).
+`exit`, `stopped`, `cancelled`, `failed`). A blocked session waiting for user
+input still counts as active since it isn't resolved yet.
 
 ## Run locally
 
