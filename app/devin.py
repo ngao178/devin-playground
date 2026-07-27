@@ -61,16 +61,32 @@ class DevinClient:
         self._timeout = timeout
 
     async def create_session(self, issue: Issue) -> Session:
-        tag = issue_tag(issue)
+        return await self.create_tagged_session(
+            prompt=build_prompt(issue),
+            title=f"Issue #{issue.number}: {issue.title}",
+            repository=issue.repository,
+            dedupe_tag=issue_tag(issue),
+            extra_tags=["src:github"],
+        )
+
+    async def create_tagged_session(
+        self,
+        prompt: str,
+        title: str,
+        repository: str,
+        dedupe_tag: str,
+        extra_tags: list[str] | None = None,
+    ) -> Session:
+        """Create a session unless one already carries `dedupe_tag`."""
         payload = {
-            "prompt": build_prompt(issue),
-            "title": f"Issue #{issue.number}: {issue.title}",
-            "repos": [issue.repository],
-            "tags": ["src:github", f"repo:{issue.repository}", tag],
+            "prompt": prompt,
+            "title": title,
+            "repos": [repository],
+            "tags": [*(extra_tags or []), f"repo:{repository}", dedupe_tag],
         }
 
         async with httpx.AsyncClient(timeout=self._timeout) as client:
-            existing = await self._find_session(client, tag)
+            existing = await self._find_session(client, dedupe_tag)
             if existing is not None:
                 return existing
 

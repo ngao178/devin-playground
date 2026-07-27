@@ -42,6 +42,29 @@ A session counts as *active* until its status is terminal (`finished`, `expired`
 `exit`, `stopped`, `cancelled`, `failed`). A blocked session waiting for user
 input still counts as active since it isn't resolved yet.
 
+## Dependency bump scanner
+
+A second, independent path (no webhook involved) runs inside the same process.
+Every `DEP_SCAN_INTERVAL_SECONDS` (default `150`, i.e. 2.5 minutes) it:
+
+1. Reads the current `HEAD` of each repo in `DEP_SCAN_REPOS` (defaults to
+   `ALLOWED_REPOS`). The first pass only records a baseline sha.
+2. Diffs `last-scanned-sha...HEAD` via the GitHub compare API and looks for
+   changed dependency manifests/lockfiles (`requirements*.txt`,
+   `pyproject.toml`, `package.json`, `go.mod`, `Cargo.toml`, `Gemfile`, …).
+3. If any are touched, starts a Devin session tagged
+   `depscan:<owner>/<repo>@<sha>` that checks the declared dependencies against
+   the latest releases and **opens the bump pull requests** (one per ecosystem,
+   `chore(deps): bump <ecosystem> dependencies`, versions ≥7 days old,
+   lockfiles regenerated with the project's package manager).
+
+The sha tag is the dedupe key, so a restart or an overlapping scan reuses the
+existing session instead of opening duplicate PRs. Scanner sessions show up on
+the dashboard with trigger `depscan`.
+
+`POST /dep-scan` runs a scan immediately and returns what each repo scan found —
+handy for testing without waiting for the interval.
+
 ## Run locally
 
 ```bash
@@ -105,6 +128,10 @@ Create an issue label named `devin` (or set `TRIGGER_LABEL` to something else).
 | `DEVIN_API_URL` | no | `https://api.devin.ai` | API base URL |
 | `TRIGGER_LABEL` | no | `devin` | Label that starts a session |
 | `ALLOWED_REPOS` | no | — (all repos) | Comma-separated `owner/repo` allowlist |
+| `DEP_SCAN_ENABLED` | no | `true` | Turns the periodic dependency scanner on/off |
+| `DEP_SCAN_INTERVAL_SECONDS` | no | `150` | Seconds between dependency scans |
+| `DEP_SCAN_REPOS` | no | `ALLOWED_REPOS` | Comma-separated repos to scan |
+| `GITHUB_TOKEN` | no | — | Raises GitHub read rate limits; required for private repos |
 
 ## Tests
 

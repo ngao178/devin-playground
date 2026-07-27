@@ -24,10 +24,17 @@ class TrackedSession:
     session_id: str
     url: str
     repository: str
-    issue_number: int
+    issue_number: int | None
     status: str
+    source: str = "issue"
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
+
+    @property
+    def subject(self) -> str:
+        if self.issue_number is None:
+            return self.repository
+        return f"{self.repository}#{self.issue_number}"
 
     @property
     def is_active(self) -> bool:
@@ -46,8 +53,9 @@ class SessionStore:
         session_id: str,
         url: str,
         repository: str,
-        issue_number: int,
+        issue_number: int | None,
         status: str,
+        source: str = "issue",
     ) -> TrackedSession:
         async with self._lock:
             existing = self._sessions.get(session_id)
@@ -59,6 +67,7 @@ class SessionStore:
                     repository=repository,
                     issue_number=issue_number,
                     status=status,
+                    source=source,
                 )
             else:
                 session = replace(existing, url=url, status=status, updated_at=now)
