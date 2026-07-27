@@ -29,7 +29,9 @@ def _badge(status: str) -> str:
 
 
 def _stats(sessions: list[TrackedSession]) -> dict[str, object]:
-    issues = {(s.repository, s.issue_number) for s in sessions}
+    issues = {
+        (s.repository, s.issue_number) for s in sessions if s.issue_number is not None
+    }
     active = [s for s in sessions if s.is_active]
     return {
         "issues_addressed": len(issues),
@@ -38,6 +40,7 @@ def _stats(sessions: list[TrackedSession]) -> dict[str, object]:
         "completed_sessions": len(sessions) - len(active),
         "by_status": Counter(s.status for s in sessions),
         "by_repository": Counter(s.repository for s in sessions),
+        "by_source": Counter(s.source for s in sessions),
     }
 
 
@@ -62,12 +65,12 @@ def _breakdown(title: str, counts: Counter) -> str:
 
 
 def _session_row(session: TrackedSession) -> str:
-    issue = f"{html.escape(session.repository)}#{session.issue_number}"
     return (
         "<tr>"
         f'<td><a href="{html.escape(session.url)}" target="_blank" '
         f'rel="noopener">{html.escape(session.session_id)}</a></td>'
-        f"<td>{issue}</td>"
+        f"<td>{html.escape(session.subject)}</td>"
+        f"<td>{html.escape(session.source)}</td>"
         f"<td>{_badge(session.status)}</td>"
         f"<td>{_fmt_time(session.created_at)}</td>"
         f"<td>{_fmt_time(session.updated_at)}</td>"
@@ -85,15 +88,17 @@ def render_dashboard(sessions: list[TrackedSession]) -> str:
             _stat_card("Completed sessions", stats["completed_sessions"]),
         ]
     )
-    breakdowns = _breakdown("By status", stats["by_status"]) + _breakdown(
-        "By repository", stats["by_repository"]
+    breakdowns = (
+        _breakdown("By status", stats["by_status"])
+        + _breakdown("By repository", stats["by_repository"])
+        + _breakdown("By trigger", stats["by_source"])
     )
 
     if sessions:
         rows = "".join(_session_row(s) for s in sessions)
         table = (
             "<table><thead><tr>"
-            "<th>Session</th><th>Issue</th><th>Status</th>"
+            "<th>Session</th><th>Subject</th><th>Trigger</th><th>Status</th>"
             "<th>Created</th><th>Updated</th>"
             "</tr></thead><tbody>"
             f"{rows}</tbody></table>"

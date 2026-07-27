@@ -1,6 +1,9 @@
+import asyncio
+import contextlib
 import hashlib
 import hmac
 import logging
+from collections.abc import AsyncIterator
 from typing import Any
 
 import httpx
@@ -10,6 +13,7 @@ from fastapi.responses import HTMLResponse
 
 from app.config import Settings
 from app.dashboard import render_dashboard
+from app.depscan import DependencyScanner
 from app.devin import DevinApiError, DevinClient, Issue
 from app.store import store
 
@@ -17,7 +21,31 @@ load_dotenv()
 
 logger = logging.getLogger("devin-webhook")
 
-app = FastAPI(title="Devin issue webhook")
+scanner: DependencyScanner | None = None
+
+
+@contextlib.asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    """Run the dependency scanner alongside the webhook for the app's lifetime."""
+    global scanner
+    settings = get_settings()
+    task: asyncio.Task | None = None
+    if settings.dep_scan_enabled and settings.dep_scan_repos:
+        scanner = DependencyScanner(settings)
+        task = asyncio.create_task(scanner.run_forever())
+    else:
+        logger.info("Dependency scanner disabled")
+    try:
+        yield
+    finally:
+        if task is not None:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+        scanner = None
+
+
+app = FastAPI(title="Devin issue webhook", lifespan=lifespan)
 
 
 def get_settings() -> Settings:
@@ -116,6 +144,28 @@ async def webhook(
         "status": "created" if session.is_new_session else "existing",
         "session_id": session.session_id,
         "url": session.url,
+    }
+
+
+@app.post("/dep-scan")
+async def trigger_dep_scan() -> dict[str, Any]:
+    """Run a dependency scan immediately instead of waiting for the interval."""
+    if scanner is None:
+        raise HTTPException(status_code=409, detail="Dependency scanner is disabled")
+    results = await scanner.scan_all()
+    return {
+        "scans": [
+            {
+                "repository": result.repository,
+                "base_sha": result.base_sha,
+                "head_sha": result.head_sha,
+                "manifests": list(result.manifests),
+                "reason": result.reason,
+                "session_id": result.session.session_id if result.session else None,
+                "session_url": result.session.url if result.session else None,
+            }
+            for result in results
+        ]
     }
 
 

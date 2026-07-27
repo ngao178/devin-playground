@@ -6,6 +6,26 @@ class ConfigError(RuntimeError):
     pass
 
 
+def _bool_env(name: str, default: bool) -> bool:
+    raw = os.environ.get(name, "").strip().lower()
+    if not raw:
+        return default
+    return raw in {"1", "true", "yes", "on"}
+
+
+def _float_env(name: str, default: float) -> float:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = float(raw)
+    except ValueError as exc:
+        raise ConfigError(f"{name} must be a number, got {raw!r}") from exc
+    if value <= 0:
+        raise ConfigError(f"{name} must be greater than 0")
+    return value
+
+
 @dataclass(frozen=True)
 class Settings:
     devin_api_key: str
@@ -14,6 +34,10 @@ class Settings:
     github_webhook_secret: str
     trigger_label: str
     allowed_repos: frozenset[str]
+    dep_scan_enabled: bool
+    dep_scan_interval_seconds: float
+    dep_scan_repos: tuple[str, ...]
+    github_token: str
 
     def is_repo_allowed(self, repository: str) -> bool:
         if not self.allowed_repos:
@@ -34,6 +58,17 @@ class Settings:
         if not github_webhook_secret:
             raise ConfigError("GITHUB_WEBHOOK_SECRET is not set")
 
+        allowed_repos = frozenset(
+            repo.strip().lower()
+            for repo in os.environ.get("ALLOWED_REPOS", "").split(",")
+            if repo.strip()
+        )
+        dep_scan_repos = tuple(
+            repo.strip()
+            for repo in os.environ.get("DEP_SCAN_REPOS", "").split(",")
+            if repo.strip()
+        ) or tuple(sorted(allowed_repos))
+
         return cls(
             devin_api_key=devin_api_key,
             devin_api_url=os.environ.get(
@@ -42,9 +77,11 @@ class Settings:
             devin_org_id=devin_org_id,
             github_webhook_secret=github_webhook_secret,
             trigger_label=os.environ.get("TRIGGER_LABEL", "devin").strip(),
-            allowed_repos=frozenset(
-                repo.strip().lower()
-                for repo in os.environ.get("ALLOWED_REPOS", "").split(",")
-                if repo.strip()
+            allowed_repos=allowed_repos,
+            dep_scan_enabled=_bool_env("DEP_SCAN_ENABLED", default=True),
+            dep_scan_interval_seconds=_float_env(
+                "DEP_SCAN_INTERVAL_SECONDS", default=150.0
             ),
+            dep_scan_repos=dep_scan_repos,
+            github_token=os.environ.get("GITHUB_TOKEN", "").strip(),
         )
