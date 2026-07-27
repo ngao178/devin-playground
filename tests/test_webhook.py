@@ -8,6 +8,7 @@ import respx
 from fastapi.testclient import TestClient
 
 from app.main import app
+from app.store import store
 
 SECRET = "test-secret"
 
@@ -18,6 +19,11 @@ def env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", SECRET)
     monkeypatch.setenv("DEVIN_API_URL", "https://api.devin.ai/v1")
     monkeypatch.setenv("TRIGGER_LABEL", "devin")
+
+
+@pytest.fixture(autouse=True)
+def reset_store() -> None:
+    store._sessions.clear()
 
 
 @pytest.fixture
@@ -99,6 +105,79 @@ def test_creates_session(client: TestClient) -> None:
     assert sent["idempotent"] is True
     assert "issues/7" in sent["prompt"]
     assert "Fixes ngao178/devin-playground#7" in sent["prompt"]
+
+
+@respx.mock
+def test_tracks_session_and_lists_it(client: TestClient) -> None:
+    respx.post("https://api.devin.ai/v1/sessions").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "session_id": "devin-123",
+                "url": "https://app.devin.ai/sessions/123",
+                "is_new_session": True,
+                "status_enum": "running",
+            },
+        )
+    )
+
+    assert post(client, labeled_payload()).status_code == 200
+
+    body = client.get("/sessions").json()
+    assert body["count"] == 1
+    session = body["sessions"][0]
+    assert session["session_id"] == "devin-123"
+    assert session["repository"] == "ngao178/devin-playground"
+    assert session["issue_number"] == 7
+    assert session["status"] == "running"
+    assert session["is_active"] is True
+
+
+def test_lists_empty_when_no_sessions(client: TestClient) -> None:
+    assert client.get("/sessions").json() == {"count": 0, "sessions": []}
+
+
+@respx.mock
+def test_active_filter_excludes_terminal_sessions(client: TestClient) -> None:
+    respx.post("https://api.devin.ai/v1/sessions").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "session_id": "devin-done",
+                "url": "https://app.devin.ai/sessions/done",
+                "is_new_session": True,
+                "status_enum": "finished",
+            },
+        )
+    )
+    assert post(client, labeled_payload()).status_code == 200
+
+    assert client.get("/sessions").json()["count"] == 1
+    assert client.get("/sessions", params={"active": "true"}).json()["count"] == 0
+
+
+@respx.mock
+def test_refresh_updates_status(client: TestClient) -> None:
+    respx.post("https://api.devin.ai/v1/sessions").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "session_id": "devin-123",
+                "url": "https://app.devin.ai/sessions/123",
+                "is_new_session": True,
+                "status_enum": "running",
+            },
+        )
+    )
+    assert post(client, labeled_payload()).status_code == 200
+
+    respx.get("https://api.devin.ai/v1/session/devin-123").mock(
+        return_value=httpx.Response(200, json={"status_enum": "finished"})
+    )
+
+    body = client.get("/sessions", params={"refresh": "true"}).json()
+    assert body["sessions"][0]["status"] == "finished"
+    assert body["sessions"][0]["is_active"] is False
 
 
 @respx.mock

@@ -21,6 +21,7 @@ class Session:
     session_id: str
     url: str
     is_new_session: bool
+    status: str
 
 
 def build_prompt(issue: Issue) -> str:
@@ -94,4 +95,28 @@ class DevinClient:
             session_id=session_id,
             url=url,
             is_new_session=bool(data.get("is_new_session", True)),
+            status=_extract_status(data),
         )
+
+    async def get_status(self, session_id: str) -> str:
+        async with httpx.AsyncClient(timeout=self._timeout) as client:
+            response = await client.get(
+                f"{self._api_url}/session/{session_id}", headers=self._headers
+            )
+            response.raise_for_status()
+            try:
+                data = response.json()
+            except ValueError as exc:
+                raise DevinApiError("Devin API returned a non-JSON response") from exc
+
+        if not isinstance(data, dict):
+            raise DevinApiError("Devin API returned an unexpected response body")
+
+        return _extract_status(data)
+
+
+def _extract_status(data: dict) -> str:
+    status = data.get("status_enum") or data.get("status")
+    if isinstance(status, str) and status:
+        return status
+    return "unknown"

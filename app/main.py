@@ -9,6 +9,7 @@ from fastapi import FastAPI, Header, HTTPException, Request
 
 from app.config import Settings
 from app.devin import DevinApiError, DevinClient, Issue
+from app.store import store
 
 load_dotenv()
 
@@ -90,6 +91,14 @@ async def webhook(
             status_code=502, detail=f"Devin API request failed: {exc}"
         ) from exc
 
+    await store.upsert(
+        session_id=session.session_id,
+        url=session.url,
+        repository=issue.repository,
+        issue_number=issue.number,
+        status=session.status,
+    )
+
     logger.info(
         "Created Devin session %s for %s#%s",
         session.session_id,
@@ -101,3 +110,27 @@ async def webhook(
         "session_id": session.session_id,
         "url": session.url,
     }
+
+
+@app.get("/sessions")
+async def list_sessions(active: bool = False, refresh: bool = False) -> dict[str, Any]:
+    if refresh:
+        await refresh_statuses()
+    sessions = await store.list(active_only=active)
+    return {
+        "count": len(sessions),
+        "sessions": [session.to_dict() for session in sessions],
+    }
+
+
+async def refresh_statuses() -> None:
+    """Poll the Devin API for the latest status of each tracked session."""
+    settings = get_settings()
+    client = DevinClient(settings.devin_api_key, settings.devin_api_url)
+    for session in await store.list():
+        try:
+            status = await client.get_status(session.session_id)
+        except (httpx.HTTPError, DevinApiError):
+            logger.exception("Failed to refresh status for %s", session.session_id)
+            continue
+        await store.set_status(session.session_id, status)
