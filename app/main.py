@@ -137,6 +137,11 @@ async def webhook(
 async def trigger_dep_scan() -> dict[str, Any]:
     """Audit the watched repos now and start bump sessions for what turns up."""
     results = await get_scanner().scan_all()
+    if results and all(result.failed for result in results):
+        raise HTTPException(
+            status_code=502,
+            detail="; ".join(f"{r.repository}: {r.error}" for r in results),
+        )
     return {
         "scans": [
             {
@@ -145,6 +150,7 @@ async def trigger_dep_scan() -> dict[str, Any]:
                 "manifests": list(result.manifests),
                 "findings": [finding.describe() for finding in result.findings],
                 "reason": result.reason,
+                "error": result.error,
                 "session_id": result.session.session_id if result.session else None,
                 "session_url": result.session.url if result.session else None,
             }

@@ -172,10 +172,25 @@ async def test_scan_creates_session_when_auditing_is_disabled(
 
 
 @respx.mock
-async def test_scan_all_survives_github_errors() -> None:
+async def test_scan_all_reports_github_errors() -> None:
     respx.get(COMMITS_URL).mock(return_value=httpx.Response(503))
 
-    assert await DependencyScanner(Settings.from_env()).scan_all() == []
+    results = await DependencyScanner(Settings.from_env()).scan_all()
+
+    assert [(r.repository, r.reason, r.failed) for r in results] == [
+        (REPO, "scan failed", True)
+    ]
+    assert "503" in results[0].error
+
+
+@respx.mock
+def test_dep_scan_endpoint_reports_failures(client: TestClient) -> None:
+    respx.get(COMMITS_URL).mock(return_value=httpx.Response(503))
+
+    response = client.post("/dep-scan")
+
+    assert response.status_code == 502
+    assert REPO in response.json()["detail"]
 
 
 def test_dep_scan_endpoint_conflicts_when_disabled(
@@ -202,6 +217,7 @@ def test_dep_scan_endpoint_runs_a_scan(
             "manifests": ["package.json"],
             "findings": [FINDING.describe()],
             "reason": "bump session created",
+            "error": "",
             "session_id": "devin-dep",
             "session_url": "https://app.devin.ai/sessions/dep",
         }
