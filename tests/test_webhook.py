@@ -123,6 +123,10 @@ def test_tracks_session_and_shows_it_on_dashboard(client: TestClient) -> None:
 
     assert post(client, labeled_payload()).status_code == 200
 
+    respx.get("https://api.devin.ai/v1/session/devin-123").mock(
+        return_value=httpx.Response(200, json={"status_enum": "running"})
+    )
+
     response = client.get("/sessions")
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/html")
@@ -155,6 +159,10 @@ def test_dashboard_counts_active_and_completed(client: TestClient) -> None:
         )
     )
     assert post(client, labeled_payload()).status_code == 200
+
+    respx.get("https://api.devin.ai/v1/session/devin-done").mock(
+        return_value=httpx.Response(200, json={"status_enum": "finished"})
+    )
 
     body = client.get("/").text
     assert "finished" in body

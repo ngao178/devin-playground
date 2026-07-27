@@ -3,7 +3,20 @@ import time
 from dataclasses import dataclass, field, replace
 
 # Devin session statuses considered terminal (session is no longer active).
-TERMINAL_STATUSES = frozenset({"finished", "expired", "blocked", "stopped", "failed"})
+# A blocked/waiting session is still counted as active since it is not resolved.
+TERMINAL_STATUSES = frozenset(
+    {
+        "finished",
+        "completed",
+        "expired",
+        "exit",
+        "exited",
+        "stopped",
+        "cancelled",
+        "canceled",
+        "failed",
+    }
+)
 
 
 @dataclass(frozen=True)
