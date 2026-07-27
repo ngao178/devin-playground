@@ -84,7 +84,12 @@ async def webhook(
         return {"status": "ignored", "reason": "trigger conditions not met"}
 
     issue = parse_issue(payload)
-    client = DevinClient(settings.devin_api_key, settings.devin_api_url)
+    if not settings.is_repo_allowed(issue.repository):
+        return {"status": "ignored", "reason": f"repo not allowed: {issue.repository}"}
+
+    client = DevinClient(
+        settings.devin_api_key, settings.devin_api_url, settings.devin_org_id
+    )
     try:
         session = await client.create_session(issue)
     except (httpx.HTTPError, DevinApiError) as exc:
@@ -126,7 +131,9 @@ async def sessions_dashboard(refresh: bool = True) -> HTMLResponse:
 async def refresh_statuses() -> None:
     """Poll the Devin API for the latest status of each tracked session."""
     settings = get_settings()
-    client = DevinClient(settings.devin_api_key, settings.devin_api_url)
+    client = DevinClient(
+        settings.devin_api_key, settings.devin_api_url, settings.devin_org_id
+    )
     for session in await store.list():
         try:
             status = await client.get_status(session.session_id)
