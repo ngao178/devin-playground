@@ -51,14 +51,33 @@ Health check: `curl localhost:8000/healthz`
 ## Run with Docker
 
 ```bash
+cp .env.example .env   # fill in DEVIN_API_KEY and GITHUB_WEBHOOK_SECRET
 docker build -t devin-issue-webhook .
 docker run --rm -p 8000:8000 --env-file .env devin-issue-webhook
 ```
 
+## Run with Docker Compose (webhook + ngrok)
+
+`docker-compose.yml` runs the webhook and an ngrok tunnel that exposes it
+publicly, so GitHub can reach it without a manual `ngrok` process.
+
+```bash
+cp .env.example .env   # fill in DEVIN_API_KEY, GITHUB_WEBHOOK_SECRET, NGROK_AUTHTOKEN
+docker compose up --build
+```
+
+- Dashboard: http://localhost:8000/
+- Public webhook URL: open the ngrok inspector at http://localhost:4040 and copy
+  the `https://…ngrok…` forwarding URL; the webhook lives at `<that-url>/webhook`.
+
+Get `NGROK_AUTHTOKEN` from https://dashboard.ngrok.com/get-started/your-authtoken.
+
+Stop with `docker compose down`.
+
 ## Point GitHub at it
 
-Expose the port publicly (deploy it, or `ngrok http 8000` while testing), then in
-the repo: **Settings → Webhooks → Add webhook**
+Expose the port publicly (the Compose `ngrok` service above, or `ngrok http 8000`
+while testing), then in the repo: **Settings → Webhooks → Add webhook**
 
 - Payload URL: `https://<your-host>/webhook`
 - Content type: `application/json`
