@@ -1,7 +1,6 @@
 import asyncio
 import time
-from dataclasses import asdict, dataclass, field, replace
-from typing import Any
+from dataclasses import dataclass, field, replace
 
 # Devin session statuses considered terminal (session is no longer active).
 TERMINAL_STATUSES = frozenset({"finished", "expired", "blocked", "stopped", "failed"})
@@ -20,11 +19,6 @@ class TrackedSession:
     @property
     def is_active(self) -> bool:
         return self.status.lower() not in TERMINAL_STATUSES
-
-    def to_dict(self) -> dict[str, Any]:
-        data = asdict(self)
-        data["is_active"] = self.is_active
-        return data
 
 
 class SessionStore:
@@ -67,11 +61,9 @@ class SessionStore:
             self._sessions[session_id] = session
             return session
 
-    async def list(self, active_only: bool = False) -> list[TrackedSession]:
+    async def list(self) -> list[TrackedSession]:
         async with self._lock:
             sessions = list(self._sessions.values())
-        if active_only:
-            sessions = [s for s in sessions if s.is_active]
         return sorted(sessions, key=lambda s: s.created_at, reverse=True)
 
     async def get(self, session_id: str) -> TrackedSession | None:

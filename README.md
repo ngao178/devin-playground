@@ -16,42 +16,26 @@ labeled `devin`.
 Sessions are created with `idempotent: true`, so replays or re-labeling reuse the
 existing session instead of spawning duplicates.
 
-Every session that is spun up is recorded in an in-memory store, so you can list
-the sessions and their current states (see below). The store lives in the process
-memory and is reset on restart.
+Every session that is spun up is recorded in an in-memory store, so you can watch
+the sessions and their current states on a dashboard (see below). The store lives
+in the process memory and is reset on restart.
 
-## List tracked sessions
+## Session dashboard
 
-```bash
-# All sessions tracked since the process started
-curl localhost:8000/sessions
+Open `http://localhost:8000/` (also served at `/sessions`) in a browser for an
+HTML dashboard that shows:
 
-# Only sessions that are still active (not finished/expired/blocked/...)
-curl 'localhost:8000/sessions?active=true'
+- **Summary cards**: issues addressed, total sessions, active sessions, completed
+  sessions.
+- **Breakdowns** by status and by repository.
+- **A table** of every tracked session with its status badge, linked session URL,
+  originating issue, and created/updated timestamps.
 
-# Poll the Devin API for the latest status of each session before listing
-curl 'localhost:8000/sessions?refresh=true'
-```
+Add `?refresh=true` (e.g. `http://localhost:8000/?refresh=true`) to poll the Devin
+API for the latest status of each session before rendering.
 
-Response shape:
-
-```json
-{
-  "count": 1,
-  "sessions": [
-    {
-      "session_id": "devin-123",
-      "url": "https://app.devin.ai/sessions/123",
-      "repository": "ngao178/devin-playground",
-      "issue_number": 7,
-      "status": "running",
-      "created_at": 1737940000.0,
-      "updated_at": 1737940000.0,
-      "is_active": true
-    }
-  ]
-}
-```
+A session counts as *active* until its status is terminal (`finished`, `expired`,
+`blocked`, `stopped`, `failed`).
 
 ## Run locally
 

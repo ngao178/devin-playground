@@ -6,8 +6,10 @@ from typing import Any
 import httpx
 from dotenv import load_dotenv
 from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi.responses import HTMLResponse
 
 from app.config import Settings
+from app.dashboard import render_dashboard
 from app.devin import DevinApiError, DevinClient, Issue
 from app.store import store
 
@@ -112,15 +114,13 @@ async def webhook(
     }
 
 
-@app.get("/sessions")
-async def list_sessions(active: bool = False, refresh: bool = False) -> dict[str, Any]:
+@app.get("/", response_class=HTMLResponse)
+@app.get("/sessions", response_class=HTMLResponse)
+async def sessions_dashboard(refresh: bool = False) -> HTMLResponse:
     if refresh:
         await refresh_statuses()
-    sessions = await store.list(active_only=active)
-    return {
-        "count": len(sessions),
-        "sessions": [session.to_dict() for session in sessions],
-    }
+    sessions = await store.list()
+    return HTMLResponse(render_dashboard(sessions))
 
 
 async def refresh_statuses() -> None:
