@@ -102,6 +102,16 @@ def test_creates_session(client: TestClient) -> None:
 
 
 @respx.mock
+def test_malformed_devin_response_returns_502(client: TestClient) -> None:
+    respx.post("https://api.devin.ai/v1/sessions").mock(
+        return_value=httpx.Response(200, json={"session_id": "devin-123"})
+    )
+    response = post(client, labeled_payload())
+    assert response.status_code == 502
+    assert "url" in response.json()["detail"]
+
+
+@respx.mock
 def test_devin_error_returns_502(client: TestClient) -> None:
     respx.post("https://api.devin.ai/v1/sessions").mock(
         return_value=httpx.Response(500, json={"error": "boom"})

@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, Header, HTTPException, Request
 
 from app.config import Settings
-from app.devin import DevinClient, Issue
+from app.devin import DevinApiError, DevinClient, Issue
 
 load_dotenv()
 
@@ -84,7 +84,7 @@ async def webhook(
     client = DevinClient(settings.devin_api_key, settings.devin_api_url)
     try:
         session = await client.create_session(issue)
-    except httpx.HTTPError as exc:
+    except (httpx.HTTPError, DevinApiError) as exc:
         logger.exception("Failed to create Devin session for %s", issue.url)
         raise HTTPException(
             status_code=502, detail=f"Devin API request failed: {exc}"

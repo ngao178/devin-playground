@@ -3,6 +3,10 @@ from dataclasses import dataclass
 import httpx
 
 
+class DevinApiError(RuntimeError):
+    pass
+
+
 @dataclass(frozen=True)
 class Issue:
     repository: str
@@ -66,10 +70,28 @@ class DevinClient:
                 f"{self._api_url}/sessions", headers=self._headers, json=payload
             )
             response.raise_for_status()
-            data = response.json()
+            try:
+                data = response.json()
+            except ValueError as exc:
+                raise DevinApiError("Devin API returned a non-JSON response") from exc
+
+        if not isinstance(data, dict):
+            raise DevinApiError("Devin API returned an unexpected response body")
+
+        session_id = data.get("session_id")
+        url = data.get("url")
+        missing = [
+            name
+            for name, value in (("session_id", session_id), ("url", url))
+            if not isinstance(value, str) or not value
+        ]
+        if missing:
+            raise DevinApiError(
+                f"Devin API response missing field(s): {', '.join(missing)}"
+            )
 
         return Session(
-            session_id=data["session_id"],
-            url=data["url"],
+            session_id=session_id,
+            url=url,
             is_new_session=bool(data.get("is_new_session", True)),
         )
