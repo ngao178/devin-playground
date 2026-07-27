@@ -18,6 +18,27 @@ Every session is tagged `issue:<owner>/<repo>#<number>`, and the app looks that
 tag up before creating anything, so replays or re-labeling reuse the existing
 session instead of spawning duplicates.
 
+Every session that is spun up is recorded in an in-memory store, so you can watch
+the sessions and their current states on a dashboard (see below). The store lives
+in the process memory and is reset on restart.
+
+## Session dashboard
+
+Open `http://localhost:8000/` (also served at `/sessions`) in a browser for an
+HTML dashboard that shows:
+
+- **Summary cards**: issues addressed, total sessions, active sessions, completed
+  sessions.
+- **Breakdowns** by status and by repository.
+- **A table** of every tracked session with its status badge, linked session URL,
+  originating issue, and created/updated timestamps.
+
+Add `?refresh=true` (e.g. `http://localhost:8000/?refresh=true`) to poll the Devin
+API for the latest status of each session before rendering.
+
+A session counts as *active* until its status is terminal (`finished`, `expired`,
+`blocked`, `stopped`, `failed`).
+
 ## Run locally
 
 ```bash
@@ -32,9 +53,28 @@ Health check: `curl localhost:8000/healthz`
 ## Run with Docker
 
 ```bash
+cp .env.example .env   # fill in DEVIN_API_KEY and GITHUB_WEBHOOK_SECRET
 docker build -t devin-issue-webhook .
 docker run --rm -p 8000:8000 --env-file .env devin-issue-webhook
 ```
+
+## Run with Docker Compose (webhook + ngrok)
+
+`docker-compose.yml` runs the webhook and an ngrok tunnel that exposes it
+publicly, so GitHub can reach it without a manual `ngrok` process.
+
+```bash
+cp .env.example .env   # fill in DEVIN_API_KEY, GITHUB_WEBHOOK_SECRET, NGROK_AUTHTOKEN
+docker compose up --build
+```
+
+- Dashboard: http://localhost:8000/
+- Public webhook URL: open the ngrok inspector at http://localhost:4040 and copy
+  the `https://…ngrok…` forwarding URL; the webhook lives at `<that-url>/webhook`.
+
+Get `NGROK_AUTHTOKEN` from https://dashboard.ngrok.com/get-started/your-authtoken.
+
+Stop with `docker compose down`.
 
 ## Point GitHub at it
 
@@ -42,8 +82,8 @@ The service is currently configured for
 [`ngao178/superset`](https://github.com/ngao178/superset) via `ALLOWED_REPOS`;
 issues from any other repo are ignored even if the signature is valid.
 
-Expose the port publicly (deploy it, or `ngrok http 8000` while testing), then in
-the repo: **Settings → Webhooks → Add webhook**
+Expose the port publicly (the Compose `ngrok` service above, or `ngrok http 8000`
+while testing), then in the repo: **Settings → Webhooks → Add webhook**
 
 - Payload URL: `https://<your-host>/webhook`
 - Content type: `application/json`

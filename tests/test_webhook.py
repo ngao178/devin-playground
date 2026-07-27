@@ -8,6 +8,7 @@ import respx
 from fastapi.testclient import TestClient
 
 from app.main import app
+from app.store import store
 
 SECRET = "test-secret"
 ORG = "org-test"
@@ -32,6 +33,11 @@ def env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DEVIN_ORG_ID", ORG)
     monkeypatch.setenv("TRIGGER_LABEL", "devin")
     monkeypatch.setenv("ALLOWED_REPOS", "ngao178/superset")
+
+
+@pytest.fixture(autouse=True)
+def reset_store() -> None:
+    store._sessions.clear()
 
 
 @pytest.fixture
@@ -140,6 +146,69 @@ def test_allows_any_repo_when_unset(
         )
         response = post(client, labeled_payload(repo="someone-else/superset"))
     assert response.json()["status"] == "created"
+
+
+@respx.mock
+def test_tracks_session_and_shows_it_on_dashboard(client: TestClient) -> None:
+    mock_no_existing_session()
+    respx.post(SESSIONS_URL).mock(
+        return_value=httpx.Response(200, json=SESSION_BODY | {"status": "running"})
+    )
+
+    assert post(client, labeled_payload()).status_code == 200
+
+    response = client.get("/sessions")
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/html")
+    body = response.text
+    assert "Devin session dashboard" in body
+    assert "devin-123" in body
+    assert "ngao178/superset#7" in body
+    assert "running" in body
+    # one issue addressed, one active session
+    assert "Issues addressed" in body
+
+
+def test_dashboard_empty_state(client: TestClient) -> None:
+    response = client.get("/")
+    assert response.status_code == 200
+    assert "No sessions have been started yet." in response.text
+
+
+@respx.mock
+def test_dashboard_counts_active_and_completed(client: TestClient) -> None:
+    mock_no_existing_session()
+    respx.post(SESSIONS_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "session_id": "devin-done",
+                "url": "https://app.devin.ai/sessions/done",
+                "status": "finished",
+            },
+        )
+    )
+    assert post(client, labeled_payload()).status_code == 200
+
+    body = client.get("/").text
+    assert "finished" in body
+    assert "Completed sessions" in body
+
+
+@respx.mock
+def test_refresh_updates_status(client: TestClient) -> None:
+    mock_no_existing_session()
+    respx.post(SESSIONS_URL).mock(
+        return_value=httpx.Response(200, json=SESSION_BODY | {"status": "running"})
+    )
+    assert post(client, labeled_payload()).status_code == 200
+
+    respx.get(f"{SESSIONS_URL}/devin-123").mock(
+        return_value=httpx.Response(200, json={"status": "finished"})
+    )
+
+    body = client.get("/sessions", params={"refresh": "true"}).text
+    assert "finished" in body
 
 
 @respx.mock

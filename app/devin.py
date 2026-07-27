@@ -21,6 +21,7 @@ class Session:
     session_id: str
     url: str
     is_new_session: bool
+    status: str
 
 
 def issue_tag(issue: Issue) -> str:
@@ -100,6 +101,18 @@ class DevinClient:
             raise DevinApiError("Devin API returned an unexpected session entry")
         return _parse_session(items[0], is_new_session=False)
 
+    async def get_status(self, session_id: str) -> str:
+        async with httpx.AsyncClient(timeout=self._timeout) as client:
+            response = await client.get(
+                f"{self._sessions_url}/{_devin_id(session_id)}", headers=self._headers
+            )
+            response.raise_for_status()
+            return _extract_status(_json_body(response))
+
+
+def _devin_id(session_id: str) -> str:
+    return session_id if session_id.startswith("devin-") else f"devin-{session_id}"
+
 
 def _json_body(response: httpx.Response) -> dict:
     try:
@@ -124,4 +137,16 @@ def _parse_session(data: dict, is_new_session: bool) -> Session:
             f"Devin API response missing field(s): {', '.join(missing)}"
         )
 
-    return Session(session_id=session_id, url=url, is_new_session=is_new_session)
+    return Session(
+        session_id=session_id,
+        url=url,
+        is_new_session=is_new_session,
+        status=_extract_status(data),
+    )
+
+
+def _extract_status(data: dict) -> str:
+    status = data.get("status_enum") or data.get("status")
+    if isinstance(status, str) and status:
+        return status
+    return "unknown"
