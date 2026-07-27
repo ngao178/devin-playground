@@ -37,6 +37,8 @@ class Settings:
     dep_scan_enabled: bool
     dep_scan_interval_seconds: float
     dep_scan_repos: tuple[str, ...]
+    dep_audit_enabled: bool
+    dep_audit_timeout_seconds: float
     github_token: str
 
     def is_repo_allowed(self, repository: str) -> bool:
@@ -83,5 +85,9 @@ class Settings:
                 "DEP_SCAN_INTERVAL_SECONDS", default=150.0
             ),
             dep_scan_repos=dep_scan_repos,
+            dep_audit_enabled=_bool_env("DEP_AUDIT_ENABLED", default=True),
+            dep_audit_timeout_seconds=_float_env(
+                "DEP_AUDIT_TIMEOUT_SECONDS", default=300.0
+            ),
             github_token=os.environ.get("GITHUB_TOKEN", "").strip(),
         )
