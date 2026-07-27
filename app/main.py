@@ -3,6 +3,7 @@ import contextlib
 import hashlib
 import hmac
 import logging
+import os
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -19,6 +20,10 @@ from app.store import store
 
 load_dotenv()
 
+logging.basicConfig(
+    level=os.environ.get("LOG_LEVEL", "INFO").upper(),
+    format="%(asctime)s %(levelname)s %(name)s %(message)s",
+)
 logger = logging.getLogger("devin-webhook")
 
 scanner: DependencyScanner | None = None
