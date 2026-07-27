@@ -1,11 +1,11 @@
-"""Periodic dependency-bump scanner.
+"""On-demand dependency-bump scanner.
 
-Independent of the webhook flow: on a fixed interval it diffs each watched repo
-since the previous scan, flags dependency-manifest churn, and starts a Devin
-session whose job is to open the bump pull requests.
+Independent of the webhook flow: when triggered (dashboard button or
+`POST /dep-scan`) it lists every dependency manifest in the repo at HEAD, audits
+them for known vulnerabilities, and starts a Devin session whose job is to open
+the bump pull requests.
 """
 
-import asyncio
 import logging
 from dataclasses import dataclass
 
@@ -14,7 +14,7 @@ import httpx
 from app.audit import AuditError, Finding, audit_manifests
 from app.config import Settings
 from app.devin import DevinApiError, DevinClient, Session
-from app.github import Comparison, GitHubApiError, GitHubClient
+from app.github import GitHubApiError, GitHubClient
 from app.store import store
 
 logger = logging.getLogger("devin-webhook.depscan")
@@ -45,7 +45,6 @@ MANIFESTS = {
 @dataclass(frozen=True)
 class ScanResult:
     repository: str
-    base_sha: str
     head_sha: str
     manifests: tuple[str, ...]
     session: Session | None
@@ -54,7 +53,7 @@ class ScanResult:
 
 
 def find_manifests(files: tuple[str, ...]) -> tuple[str, ...]:
-    """Return the changed files that are dependency manifests or lockfiles."""
+    """Return the paths that are dependency manifests or lockfiles."""
     return tuple(path for path in files if path.rsplit("/", 1)[-1].lower() in MANIFESTS)
 
 
@@ -69,28 +68,32 @@ def scan_tag(repository: str, head_sha: str) -> str:
 
 def build_prompt(
     repository: str,
-    comparison: Comparison,
+    head_sha: str,
     manifests: tuple[str, ...],
     findings: tuple[Finding, ...] = (),
 ) -> str:
-    diff_url = (
-        f"https://github.com/{repository}/compare/"
-        f"{comparison.base_sha}...{comparison.head_sha}"
-    )
+    tree_url = f"https://github.com/{repository}/tree/{head_sha}"
     return "\n".join(
         [
             f"Dependency bump chore for {repository}.",
             "",
-            (
-                f"A scan of the changes since the last scan ({diff_url}) touched "
-                "these dependency manifests:"
-            ),
+            (f"A dependency scan of {tree_url} covered these manifests:"),
             *(f"- {path}" for path in manifests),
             "",
             f"Package ecosystems involved: {', '.join(ecosystems(manifests))}.",
             "",
             *_audit_section(findings),
             "REQUIREMENTS:",
+            *(
+                []
+                if findings
+                else [
+                    (
+                        "- The audit tools reported no known vulnerabilities, so "
+                        "focus on dependencies that are simply out of date."
+                    )
+                ]
+            ),
             *(
                 [
                     (
@@ -142,7 +145,7 @@ def _audit_section(findings: tuple[Finding, ...]) -> list[str]:
 
 
 class DependencyScanner:
-    """Diffs watched repos since the last scan and delegates bumps to Devin."""
+    """Audits watched repos on demand and delegates the bumps to Devin."""
 
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
@@ -150,11 +153,6 @@ class DependencyScanner:
         self._devin = DevinClient(
             settings.devin_api_key, settings.devin_api_url, settings.devin_org_id
         )
-        self._last_scanned: dict[str, str] = {}
-
-    @property
-    def last_scanned(self) -> dict[str, str]:
-        return dict(self._last_scanned)
 
     async def scan_all(self) -> list[ScanResult]:
         results = []
@@ -167,34 +165,18 @@ class DependencyScanner:
 
     async def scan_repo(self, repository: str) -> ScanResult:
         head_sha = await self._github.head_sha(repository)
-        base_sha = self._last_scanned.get(repository)
-        self._last_scanned[repository] = head_sha
-
-        if base_sha is None:
-            return ScanResult(
-                repository=repository,
-                base_sha=head_sha,
-                head_sha=head_sha,
-                manifests=(),
-                session=None,
-                reason="baseline recorded",
-            )
-
-        comparison = await self._github.compare(repository, base_sha, head_sha)
-        if comparison.is_empty:
-            return ScanResult(
-                repository, base_sha, head_sha, (), None, "no new commits"
-            )
-
-        manifests = find_manifests(comparison.files)
+        manifests = find_manifests(await self._github.list_files(repository, head_sha))
         if not manifests:
-            return ScanResult(
-                repository, base_sha, head_sha, (), None, "no dependency changes"
-            )
+            return ScanResult(repository, head_sha, (), None, "no manifests found")
 
         findings = await self._audit(repository, head_sha, manifests)
+        if self._settings.dep_audit_enabled and not findings:
+            return ScanResult(
+                repository, head_sha, manifests, None, "no vulnerabilities found"
+            )
+
         session = await self._devin.create_tagged_session(
-            prompt=build_prompt(repository, comparison, manifests, findings),
+            prompt=build_prompt(repository, head_sha, manifests, findings),
             title=f"chore(deps): bump dependencies in {repository}",
             repository=repository,
             dedupe_tag=scan_tag(repository, head_sha),
@@ -209,14 +191,13 @@ class DependencyScanner:
             source="depscan",
         )
         logger.info(
-            "Dependency scan of %s flagged %s; session %s",
+            "Dependency scan of %s found %d vulnerabilities; session %s",
             repository,
-            ", ".join(manifests),
+            len(findings),
             session.session_id,
         )
         return ScanResult(
             repository,
-            base_sha,
             head_sha,
             manifests,
             session,
@@ -240,14 +221,3 @@ class DependencyScanner:
         except (AuditError, OSError):
             logger.exception("Audit of %s@%s failed", repository, head_sha)
             return ()
-
-    async def run_forever(self) -> None:
-        interval = self._settings.dep_scan_interval_seconds
-        logger.info(
-            "Dependency scanner watching %s every %.1fs",
-            ", ".join(self._settings.dep_scan_repos) or "(no repos)",
-            interval,
-        )
-        while True:
-            await self.scan_all()
-            await asyncio.sleep(interval)

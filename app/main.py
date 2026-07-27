@@ -1,10 +1,7 @@
-import asyncio
-import contextlib
 import hashlib
 import hmac
 import logging
 import os
-from collections.abc import AsyncIterator
 from typing import Any
 
 import httpx
@@ -26,31 +23,15 @@ logging.basicConfig(
 )
 logger = logging.getLogger("devin-webhook")
 
-scanner: DependencyScanner | None = None
+app = FastAPI(title="Devin issue webhook")
 
 
-@contextlib.asynccontextmanager
-async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """Run the dependency scanner alongside the webhook for the app's lifetime."""
-    global scanner
+def get_scanner() -> DependencyScanner:
+    """The scanner is on-demand only: built per request from current settings."""
     settings = get_settings()
-    task: asyncio.Task | None = None
-    if settings.dep_scan_enabled and settings.dep_scan_repos:
-        scanner = DependencyScanner(settings)
-        task = asyncio.create_task(scanner.run_forever())
-    else:
-        logger.info("Dependency scanner disabled")
-    try:
-        yield
-    finally:
-        if task is not None:
-            task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await task
-        scanner = None
-
-
-app = FastAPI(title="Devin issue webhook", lifespan=lifespan)
+    if not settings.dep_scan_enabled or not settings.dep_scan_repos:
+        raise HTTPException(status_code=409, detail="Dependency scanner is disabled")
+    return DependencyScanner(settings)
 
 
 def get_settings() -> Settings:
@@ -154,15 +135,12 @@ async def webhook(
 
 @app.post("/dep-scan")
 async def trigger_dep_scan() -> dict[str, Any]:
-    """Run a dependency scan immediately instead of waiting for the interval."""
-    if scanner is None:
-        raise HTTPException(status_code=409, detail="Dependency scanner is disabled")
-    results = await scanner.scan_all()
+    """Audit the watched repos now and start bump sessions for what turns up."""
+    results = await get_scanner().scan_all()
     return {
         "scans": [
             {
                 "repository": result.repository,
-                "base_sha": result.base_sha,
                 "head_sha": result.head_sha,
                 "manifests": list(result.manifests),
                 "findings": [finding.describe() for finding in result.findings],
@@ -178,10 +156,17 @@ async def trigger_dep_scan() -> dict[str, Any]:
 @app.get("/", response_class=HTMLResponse)
 @app.get("/sessions", response_class=HTMLResponse)
 async def sessions_dashboard(refresh: bool = True) -> HTMLResponse:
+    settings = get_settings()
     if refresh:
         await refresh_statuses()
     sessions = await store.list()
-    return HTMLResponse(render_dashboard(sessions))
+    return HTMLResponse(
+        render_dashboard(
+            sessions,
+            scan_enabled=settings.dep_scan_enabled and bool(settings.dep_scan_repos),
+            scan_repos=settings.dep_scan_repos,
+        )
+    )
 
 
 async def refresh_statuses() -> None:
