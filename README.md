@@ -8,13 +8,14 @@ labeled `devin`.
 1. GitHub sends an `issues` webhook to `POST /webhook`.
 2. The request signature is verified against `GITHUB_WEBHOOK_SECRET`.
 3. If the event is `labeled` with the trigger label (or `opened` with that label
-   already applied), the app POSTs to `https://api.devin.ai/v1/sessions` with a
-   prompt built from the issue title, body, and URL.
+   already applied), the app POSTs to
+   `https://api.devin.ai/v3/organizations/{DEVIN_ORG_ID}/sessions` with a prompt
+   built from the issue title, body, and URL.
 4. The response returns the session id and URL; the session itself is instructed
    to open a PR referencing the issue and comment the PR URL back on it.
 
-Sessions are created with `idempotent: true`, so replays or re-labeling reuse the
-existing session instead of spawning duplicates.
+The app tracks a session per `(repository, issue)`, so replays or re-labeling of
+the same issue reuse the existing tracked session instead of spawning duplicates.
 
 Every session that is spun up is recorded in an in-memory store, so you can watch
 the sessions and their current states on a dashboard (see below). The store lives
@@ -36,16 +37,16 @@ load and auto-reloads every 15 seconds, so the numbers update on their own. Pass
 `?refresh=false` (e.g. `http://localhost:8000/?refresh=false`) to skip the live
 status poll and render the last-known statuses instantly.
 
-A session counts as *active* until its status is terminal (`finished`, `expired`,
-`exit`, `stopped`, `cancelled`, `failed`). A blocked session waiting for user
-input still counts as active since it isn't resolved yet.
+A session counts as *active* until its status is terminal (`exit`, `error`,
+`finished`, `expired`, `stopped`, `cancelled`, `failed`). A blocked session
+waiting for user input still counts as active since it isn't resolved yet.
 
 ## Run locally
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
-cp .env.example .env   # fill in DEVIN_API_KEY and GITHUB_WEBHOOK_SECRET
+cp .env.example .env   # fill in DEVIN_API_KEY, DEVIN_ORG_ID and GITHUB_WEBHOOK_SECRET
 uvicorn app.main:app --reload --port 8000
 ```
 
@@ -54,7 +55,7 @@ Health check: `curl localhost:8000/healthz`
 ## Run with Docker
 
 ```bash
-cp .env.example .env   # fill in DEVIN_API_KEY and GITHUB_WEBHOOK_SECRET
+cp .env.example .env   # fill in DEVIN_API_KEY, DEVIN_ORG_ID and GITHUB_WEBHOOK_SECRET
 docker build -t devin-issue-webhook .
 docker run --rm -p 8000:8000 --env-file .env devin-issue-webhook
 ```
@@ -65,7 +66,7 @@ docker run --rm -p 8000:8000 --env-file .env devin-issue-webhook
 publicly, so GitHub can reach it without a manual `ngrok` process.
 
 ```bash
-cp .env.example .env   # fill in DEVIN_API_KEY, GITHUB_WEBHOOK_SECRET, NGROK_AUTHTOKEN
+cp .env.example .env   # fill in DEVIN_API_KEY, DEVIN_ORG_ID, GITHUB_WEBHOOK_SECRET, NGROK_AUTHTOKEN
 docker compose up --build
 ```
 
@@ -93,9 +94,10 @@ Create an issue label named `devin` (or set `TRIGGER_LABEL` to something else).
 
 | Variable | Required | Default | Purpose |
 | --- | --- | --- | --- |
-| `DEVIN_API_KEY` | yes | — | Auth for the Devin API |
+| `DEVIN_API_KEY` | yes | — | Org-scoped key (`ManageOrgSessions`) for the Devin v3 API |
+| `DEVIN_ORG_ID` | yes | — | Devin org id (prefix `org-`) sessions are created under |
 | `GITHUB_WEBHOOK_SECRET` | yes | — | Verifies `X-Hub-Signature-256` |
-| `DEVIN_API_URL` | no | `https://api.devin.ai/v1` | API base URL |
+| `DEVIN_API_URL` | no | `https://api.devin.ai/v3` | API base URL |
 | `TRIGGER_LABEL` | no | `devin` | Label that starts a session |
 
 ## Tests

@@ -84,7 +84,18 @@ async def webhook(
         return {"status": "ignored", "reason": "trigger conditions not met"}
 
     issue = parse_issue(payload)
-    client = DevinClient(settings.devin_api_key, settings.devin_api_url)
+
+    existing = await store.find_by_issue(issue.repository, issue.number)
+    if existing is not None:
+        return {
+            "status": "existing",
+            "session_id": existing.session_id,
+            "url": existing.url,
+        }
+
+    client = DevinClient(
+        settings.devin_api_key, settings.devin_api_url, settings.devin_org_id
+    )
     try:
         session = await client.create_session(issue)
     except (httpx.HTTPError, DevinApiError) as exc:
@@ -108,7 +119,7 @@ async def webhook(
         issue.number,
     )
     return {
-        "status": "created" if session.is_new_session else "existing",
+        "status": "created",
         "session_id": session.session_id,
         "url": session.url,
     }
@@ -126,7 +137,9 @@ async def sessions_dashboard(refresh: bool = True) -> HTMLResponse:
 async def refresh_statuses() -> None:
     """Poll the Devin API for the latest status of each tracked session."""
     settings = get_settings()
-    client = DevinClient(settings.devin_api_key, settings.devin_api_url)
+    client = DevinClient(
+        settings.devin_api_key, settings.devin_api_url, settings.devin_org_id
+    )
     for session in await store.list():
         try:
             status = await client.get_status(session.session_id)

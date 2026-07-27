@@ -11,6 +11,7 @@ TERMINAL_STATUSES = frozenset(
         "expired",
         "exit",
         "exited",
+        "error",
         "stopped",
         "cancelled",
         "canceled",
@@ -31,7 +32,8 @@ class TrackedSession:
 
     @property
     def is_active(self) -> bool:
-        return self.status.lower() not in TERMINAL_STATUSES
+        base_status = self.status.split(" ", 1)[0].lower()
+        return base_status not in TERMINAL_STATUSES
 
 
 class SessionStore:
@@ -82,6 +84,18 @@ class SessionStore:
     async def get(self, session_id: str) -> TrackedSession | None:
         async with self._lock:
             return self._sessions.get(session_id)
+
+    async def find_by_issue(
+        self, repository: str, issue_number: int
+    ) -> TrackedSession | None:
+        async with self._lock:
+            for session in self._sessions.values():
+                if (
+                    session.repository == repository
+                    and session.issue_number == issue_number
+                ):
+                    return session
+        return None
 
     async def clear(self) -> None:
         async with self._lock:

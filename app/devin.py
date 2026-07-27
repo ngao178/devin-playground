@@ -46,19 +46,27 @@ def build_prompt(issue: Issue) -> str:
 
 
 class DevinClient:
-    def __init__(self, api_key: str, api_url: str, timeout: float = 30.0) -> None:
+    """Client for the Devin v3 org-scoped sessions API."""
+
+    def __init__(
+        self, api_key: str, api_url: str, org_id: str, timeout: float = 30.0
+    ) -> None:
         self._api_url = api_url
+        self._org_id = org_id
         self._headers = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
         }
         self._timeout = timeout
 
+    @property
+    def _sessions_url(self) -> str:
+        return f"{self._api_url}/organizations/{self._org_id}/sessions"
+
     async def create_session(self, issue: Issue) -> Session:
         payload = {
             "prompt": build_prompt(issue),
             "title": f"Issue #{issue.number}: {issue.title}",
-            "idempotent": True,
             "tags": [
                 "src:github",
                 f"repo:{issue.repository}",
@@ -68,16 +76,10 @@ class DevinClient:
 
         async with httpx.AsyncClient(timeout=self._timeout) as client:
             response = await client.post(
-                f"{self._api_url}/sessions", headers=self._headers, json=payload
+                self._sessions_url, headers=self._headers, json=payload
             )
             response.raise_for_status()
-            try:
-                data = response.json()
-            except ValueError as exc:
-                raise DevinApiError("Devin API returned a non-JSON response") from exc
-
-        if not isinstance(data, dict):
-            raise DevinApiError("Devin API returned an unexpected response body")
+            data = _parse_json(response)
 
         session_id = data.get("session_id")
         url = data.get("url")
@@ -94,29 +96,36 @@ class DevinClient:
         return Session(
             session_id=session_id,
             url=url,
-            is_new_session=bool(data.get("is_new_session", True)),
+            is_new_session=True,
             status=_extract_status(data),
         )
 
     async def get_status(self, session_id: str) -> str:
         async with httpx.AsyncClient(timeout=self._timeout) as client:
             response = await client.get(
-                f"{self._api_url}/session/{session_id}", headers=self._headers
+                f"{self._sessions_url}/{session_id}", headers=self._headers
             )
             response.raise_for_status()
-            try:
-                data = response.json()
-            except ValueError as exc:
-                raise DevinApiError("Devin API returned a non-JSON response") from exc
-
-        if not isinstance(data, dict):
-            raise DevinApiError("Devin API returned an unexpected response body")
+            data = _parse_json(response)
 
         return _extract_status(data)
 
 
+def _parse_json(response: httpx.Response) -> dict:
+    try:
+        data = response.json()
+    except ValueError as exc:
+        raise DevinApiError("Devin API returned a non-JSON response") from exc
+    if not isinstance(data, dict):
+        raise DevinApiError("Devin API returned an unexpected response body")
+    return data
+
+
 def _extract_status(data: dict) -> str:
-    status = data.get("status_enum") or data.get("status")
+    status = data.get("status") or data.get("status_enum")
+    detail = data.get("status_detail")
     if isinstance(status, str) and status:
+        if isinstance(detail, str) and detail and detail != status:
+            return f"{status} ({detail})"
         return status
     return "unknown"
