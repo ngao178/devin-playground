@@ -78,7 +78,65 @@ def _session_row(session: TrackedSession) -> str:
     )
 
 
-def render_dashboard(sessions: list[TrackedSession]) -> str:
+def _scan_panel(scan_enabled: bool, scan_repos: tuple[str, ...]) -> str:
+    if not scan_enabled:
+        return (
+            '<div class="scan"><span class="scan-hint">Dependency scanner is '
+            "disabled (set DEP_SCAN_ENABLED and DEP_SCAN_REPOS).</span></div>"
+        )
+    repos = html.escape(", ".join(scan_repos))
+    return (
+        '<div class="scan">'
+        '<button id="scan-btn" onclick="runScan()">Run dependency scan</button>'
+        f'<span class="scan-hint">Audits {repos} and starts a bump session for '
+        "any vulnerabilities found.</span>"
+        '<pre id="scan-out" hidden></pre>'
+        "</div>"
+    )
+
+
+_SCAN_SCRIPT = """
+<script>
+let scanning = false;
+async function runScan() {
+  const btn = document.getElementById('scan-btn');
+  const out = document.getElementById('scan-out');
+  scanning = true;
+  btn.disabled = true;
+  btn.textContent = 'Scanning\\u2026';
+  out.hidden = false;
+  out.textContent = 'Running the audit, this can take a few minutes\\u2026';
+  try {
+    const response = await fetch('/dep-scan', {method: 'POST'});
+    const body = await response.json();
+    const scans = body.scans || [];
+    out.textContent = scans.length
+      ? scans.map(function (scan) {
+          const session = scan.session_url ? ' -> ' + scan.session_url : '';
+          const findings = (scan.findings || []).length
+            ? '\\n    ' + scan.findings.join('\\n    ')
+            : '';
+          return scan.repository + ': ' + scan.reason + session + findings;
+        }).join('\\n')
+      : JSON.stringify(body);
+  } catch (err) {
+    out.textContent = 'Scan failed: ' + err;
+  } finally {
+    scanning = false;
+    btn.disabled = false;
+    btn.textContent = 'Run dependency scan';
+  }
+}
+setInterval(function () { if (!scanning) { location.reload(); } }, 15000);
+</script>
+"""
+
+
+def render_dashboard(
+    sessions: list[TrackedSession],
+    scan_enabled: bool = False,
+    scan_repos: tuple[str, ...] = (),
+) -> str:
     stats = _stats(sessions)
     cards = "".join(
         [
@@ -111,7 +169,6 @@ def render_dashboard(sessions: list[TrackedSession]) -> str:
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta http-equiv="refresh" content="15">
 <title>Devin session dashboard</title>
 <style>
   body {{ font-family: system-ui, -apple-system, sans-serif; margin: 0;
@@ -141,6 +198,16 @@ def render_dashboard(sessions: list[TrackedSession]) -> str:
   .badge {{ color: #fff; padding: 2px 10px; border-radius: 999px;
             font-size: 12px; font-weight: 600; }}
   .empty {{ color: #6b7280; }}
+  .scan {{ display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+           margin-bottom: 20px; }}
+  .scan button {{ background: #2563eb; color: #fff; border: 0; border-radius: 8px;
+                  padding: 10px 16px; font-size: 14px; font-weight: 600;
+                  cursor: pointer; }}
+  .scan button:disabled {{ background: #93a7c9; cursor: progress; }}
+  .scan-hint {{ color: #6b7280; font-size: 13px; }}
+  .scan pre {{ flex-basis: 100%; background: #fff; border: 1px solid #e5e7eb;
+               border-radius: 8px; padding: 12px; font-size: 13px;
+               white-space: pre-wrap; margin: 0; }}
   a {{ color: #2563eb; text-decoration: none; }}
 </style>
 </head>
@@ -150,9 +217,11 @@ def render_dashboard(sessions: list[TrackedSession]) -> str:
   <p>Sessions spun up from GitHub issues, tracked in memory since the last restart.</p>
 </header>
 <main>
+  {_scan_panel(scan_enabled, scan_repos)}
   <div class="cards">{cards}</div>
   <div class="breakdowns">{breakdowns}</div>
   {table}
 </main>
+{_SCAN_SCRIPT if scan_enabled else ""}
 </body>
 </html>"""

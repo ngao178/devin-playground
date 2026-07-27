@@ -1,28 +1,18 @@
-from dataclasses import dataclass
+import logging
 
 import httpx
 
 GITHUB_API_URL = "https://api.github.com"
+
+logger = logging.getLogger("devin-webhook.github")
 
 
 class GitHubApiError(RuntimeError):
     pass
 
 
-@dataclass(frozen=True)
-class Comparison:
-    base_sha: str
-    head_sha: str
-    files: tuple[str, ...]
-    commit_messages: tuple[str, ...]
-
-    @property
-    def is_empty(self) -> bool:
-        return self.base_sha == self.head_sha or not self.commit_messages
-
-
 class GitHubClient:
-    """Read-only GitHub client used to diff a repo since the previous scan."""
+    """Read-only GitHub client used to inspect a repo's files at a commit."""
 
     def __init__(
         self, token: str, api_url: str = GITHUB_API_URL, timeout: float = 30.0
@@ -45,22 +35,21 @@ class GitHubClient:
             raise GitHubApiError(f"Unexpected commits response for {repository}")
         return commit["sha"]
 
-    async def compare(self, repository: str, base: str, head: str) -> Comparison:
-        body = await self._get(f"/repos/{repository}/compare/{base}...{head}")
+    async def list_files(self, repository: str, sha: str) -> tuple[str, ...]:
+        """List every file path in the repo tree at `sha`."""
+        body = await self._get(
+            f"/repos/{repository}/git/trees/{sha}", params={"recursive": "1"}
+        )
         if not isinstance(body, dict):
-            raise GitHubApiError(f"Unexpected compare response for {repository}")
-        files = tuple(
-            entry["filename"]
-            for entry in body.get("files") or []
-            if isinstance(entry, dict) and isinstance(entry.get("filename"), str)
-        )
-        messages = tuple(
-            (entry.get("commit") or {}).get("message", "")
-            for entry in body.get("commits") or []
+            raise GitHubApiError(f"Unexpected tree response for {repository}")
+        if body.get("truncated"):
+            logger.warning("Tree listing for %s@%s was truncated", repository, sha)
+        return tuple(
+            entry["path"]
+            for entry in body.get("tree") or []
             if isinstance(entry, dict)
-        )
-        return Comparison(
-            base_sha=base, head_sha=head, files=files, commit_messages=messages
+            and entry.get("type") == "blob"
+            and isinstance(entry.get("path"), str)
         )
 
     async def _get(self, path: str, params: dict | None = None) -> object:

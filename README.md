@@ -30,6 +30,7 @@ HTML dashboard that shows:
 - **Summary cards**: issues addressed, total sessions, active sessions, completed
   sessions.
 - **Breakdowns** by status and by repository.
+- **Run dependency scan** button (see below).
 - **A table** of every tracked session with its status badge, linked session URL,
   originating issue, and created/updated timestamps.
 
@@ -44,32 +45,33 @@ input still counts as active since it isn't resolved yet.
 
 ## Dependency bump scanner
 
-A second, independent path (no webhook involved) runs inside the same process.
-Every `DEP_SCAN_INTERVAL_SECONDS` (default `150`, i.e. 2.5 minutes) it:
+A second, independent path (no webhook involved), triggered **on demand** by the
+**Run dependency scan** button on the dashboard or `POST /dep-scan`. A scan:
 
 1. Reads the current `HEAD` of each repo in `DEP_SCAN_REPOS` (defaults to
-   `ALLOWED_REPOS`). The first pass only records a baseline sha.
-2. Diffs `last-scanned-sha...HEAD` via the GitHub compare API and looks for
-   changed dependency manifests/lockfiles (`requirements*.txt`,
-   `pyproject.toml`, `package.json`, `go.mod`, `Cargo.toml`, `Gemfile`, …).
-3. If any are touched, shallow-checks-out that commit into a temp dir and runs
-   the ecosystem audit tools (`npm audit --json`, `pip-audit`), so the session
-   gets a concrete vulnerability list (package, severity, installed range, fix
-   version). Requires `git`, `npm`, and `pip-audit` on `PATH` (all installed in
-   the Docker image); set `DEP_AUDIT_ENABLED=false` to skip it. Audit failures
-   are logged and the scan continues without findings.
-4. Then starts a Devin session tagged
-   `depscan:<owner>/<repo>@<sha>` that checks the declared dependencies against
-   the latest releases and **opens the bump pull requests** (one per ecosystem,
+   `ALLOWED_REPOS`) and lists every dependency manifest/lockfile in the tree
+   (`requirements*.txt`, `pyproject.toml`, `package.json`, `go.mod`,
+   `Cargo.toml`, `Gemfile`, …). No commit needs to have touched them.
+2. Shallow-checks-out that commit into a temp dir and runs the ecosystem audit
+   tools (`npm audit --json`, `pip-audit`) to get a concrete vulnerability list
+   (package, severity, installed range, fix version). Requires `git`, `npm`, and
+   `pip-audit` on `PATH` (all installed in the Docker image). Audit failures are
+   logged and the scan continues without findings.
+3. If anything is vulnerable, starts a Devin session tagged
+   `depscan:<owner>/<repo>@<sha>` that fixes those first and also bumps whatever
+   else is out of date, then **opens the pull requests** (one per ecosystem,
    `chore(deps): bump <ecosystem> dependencies`, versions ≥7 days old,
-   lockfiles regenerated with the project's package manager).
+   lockfiles regenerated with the project's package manager). With
+   `DEP_AUDIT_ENABLED=false` the audit is skipped and the session is started for
+   any manifest found.
 
-The sha tag is the dedupe key, so a restart or an overlapping scan reuses the
+The sha tag is the dedupe key, so re-scanning the same commit reuses the
 existing session instead of opening duplicate PRs. Scanner sessions show up on
 the dashboard with trigger `depscan`.
 
-`POST /dep-scan` runs a scan immediately and returns what each repo scan found —
-handy for testing without waiting for the interval.
+`POST /dep-scan` returns, per repo, the head sha, the manifests covered, the
+vulnerabilities found, a `reason` (`bump session created`, `no vulnerabilities
+found`, `no manifests found`), and the session URL.
 
 ## Run locally
 
@@ -134,8 +136,7 @@ Create an issue label named `devin` (or set `TRIGGER_LABEL` to something else).
 | `DEVIN_API_URL` | no | `https://api.devin.ai` | API base URL |
 | `TRIGGER_LABEL` | no | `devin` | Label that starts a session |
 | `ALLOWED_REPOS` | no | — (all repos) | Comma-separated `owner/repo` allowlist |
-| `DEP_SCAN_ENABLED` | no | `true` | Turns the periodic dependency scanner on/off |
-| `DEP_SCAN_INTERVAL_SECONDS` | no | `150` | Seconds between dependency scans |
+| `DEP_SCAN_ENABLED` | no | `true` | Enables the dashboard button and `POST /dep-scan` |
 | `DEP_SCAN_REPOS` | no | `ALLOWED_REPOS` | Comma-separated repos to scan |
 | `DEP_AUDIT_ENABLED` | no | `true` | Run `npm audit --json` / `pip-audit` on the flagged commit |
 | `DEP_AUDIT_TIMEOUT_SECONDS` | no | `300` | Per-command timeout for checkout and audits |

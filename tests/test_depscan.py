@@ -5,10 +5,11 @@ import pytest
 import respx
 from fastapi.testclient import TestClient
 
-from app import depscan, main
+from app import depscan
 from app.audit import Finding
 from app.config import Settings
 from app.depscan import DependencyScanner, find_manifests
+from app.main import app
 from app.store import store
 
 ORG = "org-test"
@@ -20,6 +21,9 @@ SESSION_BODY = {
     "url": "https://app.devin.ai/sessions/dep",
     "status": "running",
 }
+FINDING = Finding(
+    "npm", "package.json", "lodash", "high", "<4.17.21", "4.17.21", "pollution"
+)
 
 
 @pytest.fixture(autouse=True)
@@ -29,8 +33,6 @@ def env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", "test-secret")
     monkeypatch.setenv("DEVIN_API_URL", "https://api.devin.ai")
     monkeypatch.setenv("DEP_SCAN_REPOS", REPO)
-    monkeypatch.setenv("DEP_SCAN_INTERVAL_SECONDS", "150")
-    monkeypatch.setenv("DEP_AUDIT_ENABLED", "false")
 
 
 @pytest.fixture(autouse=True)
@@ -38,30 +40,41 @@ def reset_store() -> None:
     store._sessions.clear()
 
 
-def mock_head(sha: str) -> None:
+@pytest.fixture
+def client() -> TestClient:
+    return TestClient(app)
+
+
+def mock_repo(files: list[str], sha: str = "sha1") -> None:
     respx.get(COMMITS_URL).mock(return_value=httpx.Response(200, json=[{"sha": sha}]))
-
-
-def mock_compare(base: str, head: str, files: list[str]) -> None:
-    respx.get(f"https://api.github.com/repos/{REPO}/compare/{base}...{head}").mock(
+    respx.get(f"https://api.github.com/repos/{REPO}/git/trees/{sha}").mock(
         return_value=httpx.Response(
             200,
-            json={
-                "files": [{"filename": name} for name in files],
-                "commits": [{"sha": head, "commit": {"message": "chore: deps"}}],
-            },
+            json={"tree": [{"path": path, "type": "blob"} for path in files]},
         )
     )
 
 
-def test_interval_defaults_to_150_seconds(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("DEP_SCAN_INTERVAL_SECONDS")
-    assert Settings.from_env().dep_scan_interval_seconds == 150.0
+def mock_devin(existing: dict | None = None):
+    respx.get(SESSIONS_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "items": [existing] if existing else [],
+                "total": 1 if existing else 0,
+            },
+        )
+    )
+    return respx.post(SESSIONS_URL).mock(
+        return_value=httpx.Response(200, json=SESSION_BODY)
+    )
 
 
-def test_interval_is_configurable(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("DEP_SCAN_INTERVAL_SECONDS", "42.5")
-    assert Settings.from_env().dep_scan_interval_seconds == 42.5
+def stub_audit(monkeypatch: pytest.MonkeyPatch, findings: tuple[Finding, ...]) -> None:
+    async def fake_audit(repository, sha, manifests, token, timeout):
+        return findings
+
+    monkeypatch.setattr(depscan, "audit_manifests", fake_audit)
 
 
 def test_dep_scan_repos_default_to_allowed_repos(
@@ -78,189 +91,134 @@ def test_find_manifests_ignores_unrelated_files() -> None:
 
 
 @respx.mock
-async def test_first_scan_only_records_a_baseline() -> None:
-    mock_head("sha1")
-    scanner = DependencyScanner(Settings.from_env())
-
-    result = await scanner.scan_repo(REPO)
-
-    assert result.session is None
-    assert result.reason == "baseline recorded"
-    assert scanner.last_scanned[REPO] == "sha1"
-
-
-@respx.mock
-async def test_scan_creates_bump_session_for_manifest_changes() -> None:
-    mock_head("sha1")
-    scanner = DependencyScanner(Settings.from_env())
-    await scanner.scan_repo(REPO)
-
-    respx.get(COMMITS_URL).mock(
-        return_value=httpx.Response(200, json=[{"sha": "sha2"}])
-    )
-    mock_compare("sha1", "sha2", ["requirements.txt", "src/app.py"])
-    respx.get(SESSIONS_URL).mock(
-        return_value=httpx.Response(200, json={"items": [], "total": 0})
-    )
-    create = respx.post(SESSIONS_URL).mock(
-        return_value=httpx.Response(200, json=SESSION_BODY)
-    )
-
-    result = await scanner.scan_repo(REPO)
-
-    assert result.manifests == ("requirements.txt",)
-    assert result.session is not None
-    sent = create.calls.last.request.read().decode()
-    assert "depscan:ngao178/superset@sha2" in sent
-    assert "requirements.txt" in sent
-    assert "chore(deps)" in sent
-    tracked = await store.list()
-    assert [s.session_id for s in tracked] == ["devin-dep"]
-    assert tracked[0].source == "depscan"
-
-
-@respx.mock
-async def test_audit_findings_are_fed_into_the_bump_prompt(
+async def test_scan_creates_session_when_vulnerabilities_are_found(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("DEP_AUDIT_ENABLED", "true")
-    finding = Finding(
-        "npm", "package.json", "lodash", "high", "<4.17.21", "4.17.21", "pollution"
-    )
+    mock_repo(["src/app.py", "package.json", "requirements.txt"])
+    stub_audit(monkeypatch, (FINDING,))
+    create = mock_devin()
 
-    async def fake_audit(repository, sha, manifests, token, timeout):
-        assert manifests == ("package.json",)
-        return (finding,)
+    result = await DependencyScanner(Settings.from_env()).scan_repo(REPO)
 
-    monkeypatch.setattr(depscan, "audit_manifests", fake_audit)
+    assert result.reason == "bump session created"
+    assert result.manifests == ("package.json", "requirements.txt")
+    assert result.findings == (FINDING,)
+    sent = json.loads(create.calls.last.request.read())
+    assert "depscan:ngao178/superset@sha1" in sent["tags"]
+    assert "[high] lodash <4.17.21" in sent["prompt"]
+    tracked = await store.list()
+    assert [(s.session_id, s.source) for s in tracked] == [("devin-dep", "depscan")]
 
-    mock_head("sha1")
+
+@respx.mock
+async def test_scan_needs_no_commit_touching_manifests(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Repeated scans of an unchanged repo still report the vulnerability."""
+    mock_repo(["package.json"])
+    stub_audit(monkeypatch, (FINDING,))
+    create = mock_devin()
     scanner = DependencyScanner(Settings.from_env())
-    await scanner.scan_repo(REPO)
 
-    respx.get(COMMITS_URL).mock(
-        return_value=httpx.Response(200, json=[{"sha": "sha2"}])
-    )
-    mock_compare("sha1", "sha2", ["package.json"])
-    respx.get(SESSIONS_URL).mock(
-        return_value=httpx.Response(200, json={"items": [], "total": 0})
-    )
-    create = respx.post(SESSIONS_URL).mock(
-        return_value=httpx.Response(200, json=SESSION_BODY)
-    )
+    first = await scanner.scan_repo(REPO)
+    assert first.reason == "bump session created"
+    assert create.call_count == 1
 
-    result = await scanner.scan_repo(REPO)
+    # Same head sha: the tag dedupes, so no second session and no duplicate PRs.
+    mock_devin(existing=SESSION_BODY)
+    second = await scanner.scan_repo(REPO)
+    assert second.session is not None
+    assert second.findings == (FINDING,)
 
-    assert result.findings == (finding,)
+
+@respx.mock
+async def test_scan_skips_session_when_no_vulnerabilities(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mock_repo(["package.json"])
+    stub_audit(monkeypatch, ())
+    create = respx.post(SESSIONS_URL).mock(return_value=httpx.Response(500))
+
+    result = await DependencyScanner(Settings.from_env()).scan_repo(REPO)
+
+    assert result.reason == "no vulnerabilities found"
+    assert not create.called
+
+
+@respx.mock
+async def test_scan_reports_when_repo_has_no_manifests() -> None:
+    mock_repo(["src/app.py", "README.md"])
+
+    result = await DependencyScanner(Settings.from_env()).scan_repo(REPO)
+
+    assert result.reason == "no manifests found"
+    assert result.manifests == ()
+
+
+@respx.mock
+async def test_scan_creates_session_when_auditing_is_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DEP_AUDIT_ENABLED", "false")
+    mock_repo(["package.json"])
+    create = mock_devin()
+
+    result = await DependencyScanner(Settings.from_env()).scan_repo(REPO)
+
+    assert result.reason == "bump session created"
+    assert result.findings == ()
     prompt = json.loads(create.calls.last.request.read())["prompt"]
-    assert "npm audit --json" in prompt
-    assert "[high] lodash <4.17.21" in prompt
-    assert "Fix every vulnerability listed above first" in prompt
-
-
-@respx.mock
-async def test_audit_is_skipped_when_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def fail(*args, **kwargs):
-        raise AssertionError("audit should not run")
-
-    monkeypatch.setattr(depscan, "audit_manifests", fail)
-
-    mock_head("sha1")
-    scanner = DependencyScanner(Settings.from_env())
-    await scanner.scan_repo(REPO)
-
-    respx.get(COMMITS_URL).mock(
-        return_value=httpx.Response(200, json=[{"sha": "sha2"}])
-    )
-    mock_compare("sha1", "sha2", ["package.json"])
-    respx.get(SESSIONS_URL).mock(
-        return_value=httpx.Response(200, json={"items": [], "total": 0})
-    )
-    respx.post(SESSIONS_URL).mock(return_value=httpx.Response(200, json=SESSION_BODY))
-
-    assert (await scanner.scan_repo(REPO)).findings == ()
-
-
-@respx.mock
-async def test_scan_skips_when_no_dependency_files_changed() -> None:
-    mock_head("sha1")
-    scanner = DependencyScanner(Settings.from_env())
-    await scanner.scan_repo(REPO)
-
-    respx.get(COMMITS_URL).mock(
-        return_value=httpx.Response(200, json=[{"sha": "sha2"}])
-    )
-    mock_compare("sha1", "sha2", ["src/app.py"])
-    create = respx.post(SESSIONS_URL).mock(return_value=httpx.Response(500))
-
-    result = await scanner.scan_repo(REPO)
-
-    assert result.reason == "no dependency changes"
-    assert not create.called
-
-
-@respx.mock
-async def test_scan_reuses_session_for_same_head_sha() -> None:
-    mock_head("sha1")
-    settings = Settings.from_env()
-    first = DependencyScanner(settings)
-    await first.scan_repo(REPO)
-
-    respx.get(COMMITS_URL).mock(
-        return_value=httpx.Response(200, json=[{"sha": "sha2"}])
-    )
-    mock_compare("sha1", "sha2", ["pyproject.toml"])
-    respx.get(SESSIONS_URL).mock(
-        return_value=httpx.Response(200, json={"items": [SESSION_BODY], "total": 1})
-    )
-    create = respx.post(SESSIONS_URL).mock(return_value=httpx.Response(500))
-
-    result = await first.scan_repo(REPO)
-
-    assert result.session is not None
-    assert not create.called
+    assert "out of date" in prompt
 
 
 @respx.mock
 async def test_scan_all_survives_github_errors() -> None:
     respx.get(COMMITS_URL).mock(return_value=httpx.Response(503))
-    scanner = DependencyScanner(Settings.from_env())
 
-    assert await scanner.scan_all() == []
+    assert await DependencyScanner(Settings.from_env()).scan_all() == []
 
 
 def test_dep_scan_endpoint_conflicts_when_disabled(
-    monkeypatch: pytest.MonkeyPatch,
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(main, "scanner", None)
-    response = TestClient(main.app).post("/dep-scan")
-    assert response.status_code == 409
+    monkeypatch.setenv("DEP_SCAN_ENABLED", "false")
+    assert client.post("/dep-scan").status_code == 409
 
 
 @respx.mock
-def test_dep_scan_endpoint_runs_a_scan(monkeypatch: pytest.MonkeyPatch) -> None:
-    mock_head("sha1")
-    monkeypatch.setattr(main, "scanner", DependencyScanner(Settings.from_env()))
+def test_dep_scan_endpoint_runs_a_scan(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    mock_repo(["package.json"])
+    stub_audit(monkeypatch, (FINDING,))
+    mock_devin()
 
-    body = TestClient(main.app).post("/dep-scan").json()
+    body = client.post("/dep-scan").json()
 
     assert body["scans"] == [
         {
             "repository": REPO,
-            "base_sha": "sha1",
             "head_sha": "sha1",
-            "manifests": [],
-            "findings": [],
-            "reason": "baseline recorded",
-            "session_id": None,
-            "session_url": None,
+            "manifests": ["package.json"],
+            "findings": [FINDING.describe()],
+            "reason": "bump session created",
+            "session_id": "devin-dep",
+            "session_url": "https://app.devin.ai/sessions/dep",
         }
     ]
 
 
-async def test_scanner_starts_and_stops_with_the_app(
-    monkeypatch: pytest.MonkeyPatch,
+def test_dashboard_shows_scan_button(client: TestClient) -> None:
+    body = client.get("/", params={"refresh": "false"}).text
+    assert "Run dependency scan" in body
+    assert "/dep-scan" in body
+    assert REPO in body
+
+
+def test_dashboard_hides_scan_button_when_disabled(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("DEP_SCAN_ENABLED", "false")
-    with TestClient(main.app):
-        assert main.scanner is None
+    body = client.get("/", params={"refresh": "false"}).text
+    assert "Run dependency scan" not in body
+    assert "Dependency scanner is disabled" in body
