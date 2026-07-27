@@ -1,12 +1,11 @@
-name: Devin on new issue
+name: Devin on "devin" label
 
 on:
   issues:
-    types: [opened, labeled]
+    types: [labeled]
 
 permissions:
   contents: read
-  issues: write
 
 concurrency:
   group: devin-issue-${{ github.event.issue.number }}
@@ -14,11 +13,7 @@ concurrency:
 
 jobs:
   create-devin-session:
-    # Runs on every newly opened issue, and on any issue that later gets the
-    # `devin` label. Drop the `opened` clause to require the label.
-    if: >-
-      github.event.action == 'opened' ||
-      github.event.label.name == 'devin'
+    if: ${{ github.event.label.name == 'devin' }}
     runs-on: ubuntu-latest
     steps:
       - name: Build prompt
@@ -39,10 +34,10 @@ jobs:
             printf -- '- Investigate the issue first and report your plan before making changes.\n'
             printf -- '- When you open a PR, include this exact line in the description: Fixes %s#%s\n' "$REPO" "$ISSUE_NUMBER"
             printf -- '- Include "Refs %s#%s" in every commit message of that PR.\n' "$REPO" "$ISSUE_NUMBER"
+            printf -- '- Once the PR is open, comment its URL on issue %s so the reporter is notified.\n' "$ISSUE_URL"
           } > prompt.txt
 
       - name: Create Devin session
-        id: devin
         env:
           DEVIN_API_KEY: ${{ secrets.DEVIN_API_KEY }}
           ISSUE_TITLE: ${{ github.event.issue.title }}
@@ -64,7 +59,7 @@ jobs:
               prompt: $prompt,
               title: $title,
               idempotent: true,
-              tags: ["src:github", "repo:" + $repo, "issue:" + $issue]
+              tags: ["src:github", "label:devin", "repo:" + $repo, "issue:" + $issue]
             }' > payload.json
 
           curl -fsS https://api.devin.ai/v1/sessions \
@@ -72,25 +67,4 @@ jobs:
             -H "Content-Type: application/json" \
             --data @payload.json > response.json
 
-          echo "url=$(jq -er '.url' response.json)" >> "$GITHUB_OUTPUT"
-          echo "session_id=$(jq -er '.session_id' response.json)" >> "$GITHUB_OUTPUT"
-          echo "is_new_session=$(jq -r '.is_new_session // true' response.json)" >> "$GITHUB_OUTPUT"
-
-      - name: Comment session link on the issue
-        if: ${{ steps.devin.outputs.url != '' && steps.devin.outputs.is_new_session == 'true' }}
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          SESSION_URL: ${{ steps.devin.outputs.url }}
-          ISSUE_NUMBER: ${{ github.event.issue.number }}
-          REPO: ${{ github.repository }}
-        run: |
-          set -euo pipefail
-          jq -n --arg url "$SESSION_URL" \
-            '{body: "Devin is picking up this issue.\n\n**Session:** \($url)"}' > comment.json
-
-          curl -fsS -X POST \
-            -H "Authorization: Bearer $GH_TOKEN" \
-            -H "Accept: application/vnd.github+json" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
-            --data @comment.json \
-            "https://api.github.com/repos/${REPO}/issues/${ISSUE_NUMBER}/comments"
+          echo "Devin session: $(jq -r '.url' response.json)" >> "$GITHUB_STEP_SUMMARY"
